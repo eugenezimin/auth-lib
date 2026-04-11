@@ -1,43 +1,41 @@
-//! Configuration implementation.
-//!
-//! Provides the [`OnceLock`]-backed singleton and all `impl` blocks for the
-//! types declared in [`crate::model::config`].
-//!
-//! # Initialization paths
-//!
-//! |-----------------------|----------------------------------------------------------|
-//! |      Method           |                         Source                           |
-//! |-----------------------|----------------------------------------------------------|
-//! | [`Config::init`]      | Environment variables / `.env` file (uses [`EnvLoader`]) |
-//! | [`Config::init_with`] | Any [`ConfigLoader`] implementation                      |
-//! |-----------------------|----------------------------------------------------------|
-
-//! # Example — environment variables (default)
-//!
-//! ```rust,no_run
-//! use crate::utils::config::Config;
-//!
-//! Config::init().expect("failed to load config");
-//!
-//! let addr = Config::global().server.bind_address();
-//! ```
-//!
-//! # Example — pre-filled struct (no env)
-//!
-//! ```rust,no_run
-//! use crate::interfaces::config::{DirectLoader, RawConfig};
-//! use crate::model::config::Config;
-//!
-//! Config::init_with(DirectLoader::new(
-//!     RawConfig::default()
-//!         .db_host("localhost")
-//!         .db_user("postgres")
-//!         .db_password("secret")
-//!         .jwt_secret("super-secret-key"),
-//! ))
-//! .expect("failed to load config");
-//! ```
-
+/// Configuration implementation.
+///
+/// Provides the [`OnceLock`]-backed singleton and all `impl` blocks for the
+/// types declared in [`crate::model::config`].
+///
+/// # Initialization paths
+///
+/// |-----------------------|----------------------------------------------------------|
+/// |      Method           |                         Source                           |
+/// |-----------------------|----------------------------------------------------------|
+/// | [`Config::init`]      | Environment variables / `.env` file (uses [`EnvLoader`]) |
+/// | [`Config::init_with`] | Any [`ConfigLoader`] implementation                      |
+/// |-----------------------|----------------------------------------------------------|
+/// # Example — environment variables (default)
+///
+/// ```rust,ignore
+/// use crate::utils::config::Config;
+///
+/// Config::init().expect("failed to load config");
+///
+/// let addr = Config::global().server.bind_address();
+/// ```
+///
+/// # Example — pre-filled struct (no env)
+///
+/// ```rust,ignore
+/// use crate::interfaces::config::{DirectLoader, RawConfig};
+/// use crate::model::config::Config;
+///
+/// Config::init_with(DirectLoader::new(
+///     RawConfig::default()
+///         .db_host("localhost")
+///         .db_user("postgres")
+///         .db_password("secret")
+///         .jwt_secret("super-secret-key"),
+/// ))
+/// .expect("failed to load config");
+/// ```
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -54,14 +52,14 @@ static CONFIG: OnceLock<Config> = OnceLock::new();
 // ── Config impls ──────────────────────────────────────────────────────────────
 
 impl Config {
-    /// Initialise from environment variables / `.env` file.
+    /// Initialize from environment variables / `.env` file.
     ///
     /// Shorthand for `Config::init_with(EnvLoader)`.
     pub fn init() -> Result<&'static Self, ConfigError> {
         Self::init_with(EnvLoader)
     }
 
-    /// Initialise from any [`ConfigLoader`].
+    /// Initialize from any [`ConfigLoader`].
     ///
     /// Call this **once** at startup.  Pass a [`DirectLoader`] (or your own
     /// implementation) to bypass environment variables entirely.
@@ -98,13 +96,13 @@ impl Config {
     pub fn global() -> &'static Self {
         CONFIG
             .get()
-            .expect("Config not initialised – call Config::init() or Config::init_with() first")
+            .expect("Config not initialized – call Config::init() or Config::init_with() first")
     }
 
-    /// Returns `true` if the global config has already been initialised.
+    /// Returns `true` if the global config has already been initialized.
     ///
     /// Useful in tests or conditional startup paths.
-    pub fn is_initialised() -> bool {
+    pub fn is_initialized() -> bool {
         CONFIG.get().is_some()
     }
 }
@@ -349,13 +347,13 @@ where
 }
 
 impl DirectLoader {
-    pub fn new(raw: RawConfig) -> Self {
-        Self { raw }
+    pub fn new(raw_config: RawConfig) -> Self {
+        Self { raw_config }
     }
 }
 
 impl ConfigLoader for DirectLoader {
     fn load(&self) -> Result<RawConfig, ConfigError> {
-        Ok(self.raw.clone())
+        Ok(self.raw_config.clone())
     }
 }

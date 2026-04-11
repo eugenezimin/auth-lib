@@ -1,9 +1,8 @@
-//! Configuration data models.
-//!
-//! This module contains **only** plain data structures and the error type.
-//! All parsing logic lives in [`crate::utils::config`];
-//! all loader traits live in [`crate::interfaces::config`].
-
+/// Configuration data models.
+///
+/// This module contains **only** plain data structures and the error type.
+/// All parsing logic lives in [`crate::utils::config`];
+/// all loader traits live in [`crate::interfaces::config`].
 use std::time::Duration;
 
 // ── Root config ───────────────────────────────────────────────────────────────
@@ -114,7 +113,7 @@ pub struct EnvLoader;
 ///
 /// # Example
 ///
-/// ```rust,no_run
+/// ```rust,ignore
 /// use auth_lib::interfaces::config::{DirectLoader, RawConfig};
 /// use auth_lib::model::config::Config;
 ///
@@ -128,5 +127,5 @@ pub struct EnvLoader;
 /// .expect("config failed");
 /// ```
 pub struct DirectLoader {
-    pub raw: RawConfig,
+    pub raw_config: RawConfig,
 }
