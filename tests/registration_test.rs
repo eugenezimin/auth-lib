@@ -12,15 +12,21 @@
 //! `--test-threads=1` keeps tests sequential so each one starts from a clean
 //! slate without races on shared database state.
 
+use std::sync::Arc;
+
 use auth_lib::{
-    interfaces::auth::AuthService,
+    auth::register::AuthServiceImpl,
+    interfaces::{auth::AuthService, storage::user_repo::UserRepo},
     model::{
         config::Config,
         storage::postgres::PgUserRepo,
-        user::{RegisterRequest, User},
+        user::{NewUser, RegisterRequest, RegisterResponse},
     },
     storage::pg_pool::build_pool,
+    utils::errors::AuthError,
 };
+
+// ── Test helpers ──────────────────────────────────────────────────────────────
 
 /// Initialize config once from env / `.env`.
 /// `OnceLock` inside `Config` means only the first call does real work.
@@ -31,23 +37,36 @@ fn init_config() -> &'static Config {
     Config::init().expect("Failed to load config from environment")
 }
 
-/// Build a fresh [`AuthService`] backed by a real pool.
-async fn make_service() -> AuthService<PgUserRepo> {
+/// Build a fresh `AuthServiceImpl` backed by a real Postgres pool.
+/// `build_pool` is synchronous — no `.await` needed.
+fn make_service() -> AuthServiceImpl {
     let cfg = init_config();
-    let pool = build_pool(&cfg.database)
-        .await
-        .expect("Failed to build DB pool");
-    let user_repo = PgUserRepo::new(pool);
-    AuthService::new(user_repo, cfg.jwt.clone())
+    let pool = build_pool(&cfg.database).expect("Failed to build DB pool");
+    let user_repo = Arc::new(PgUserRepo::new(pool));
+    AuthServiceImpl::new(user_repo)
+}
+
+/// Build a bare `PgUserRepo` for tests that bypass the service layer.
+fn make_repo() -> PgUserRepo {
+    let cfg = init_config();
+    let pool = build_pool(&cfg.database).expect("Failed to build DB pool");
+    PgUserRepo::new(pool)
 }
 
 /// Delete a user by email so each test can start from a known state.
-/// Silently succeeds if the user does not exist.
-async fn cleanup_user(service: &AuthService<PgUserRepo>, email: &str) {
-    let _ = service.user_repo().delete_by_email(email).await;
+/// The FK `ON DELETE CASCADE` on `sessions` and `user_roles` handles cleanup
+/// of related rows automatically.
+async fn cleanup_user(repo: &PgUserRepo, email: &str) {
+    if let Ok(Some(_)) = repo.find_by_email(email).await {
+        let client = repo.pg_pool.get().await.expect("pool get failed");
+        client
+            .execute("DELETE FROM users WHERE email = $1", &[&email])
+            .await
+            .expect("cleanup DELETE failed");
+    }
 }
 
-// ── Helpers for building requests ─────────────────────────────────────────────
+// ── Request builder ───────────────────────────────────────────────────────────
 
 fn valid_request() -> RegisterRequest {
     RegisterRequest {
@@ -63,27 +82,38 @@ fn valid_request() -> RegisterRequest {
 // Happy-path tests
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// A valid registration should succeed and return a populated `User`.
+/// A valid registration should succeed and return a `RegisterResponse`.
+/// We then fetch the row directly from the DB to assert all fields were
+/// persisted correctly — `register()` only returns the non-sensitive summary.
 #[tokio::test]
 async fn test_register_success() {
-    let service = make_service().await;
-    cleanup_user(&service, "alice@example.com").await;
+    let repo = make_repo();
+    let service = make_service();
+    cleanup_user(&repo, "alice@example.com").await;
 
-    let req = valid_request();
-    let user: User = service
-        .register(req)
+    let res: RegisterResponse = service
+        .register(valid_request())
         .await
         .expect("Registration should succeed");
 
-    assert!(!user.id.to_string().is_empty(), "id must be set");
-    assert_eq!(user.email, "alice@example.com");
-    assert_eq!(user.username.as_deref(), Some("alice"));
+    // Response fields
+    assert!(!res.user_id.to_string().is_empty(), "user_id must be set");
+    assert_eq!(res.email, "alice@example.com");
+    assert_eq!(res.username, Some("alice".into()));
+
+    // Confirm the full row in the DB
+    let user = repo
+        .find_by_email("alice@example.com")
+        .await
+        .expect("DB query failed")
+        .expect("user should exist in DB after registration");
+
     assert_eq!(user.first_name.as_deref(), Some("Alice"));
     assert_eq!(user.last_name.as_deref(), Some("Smith"));
     assert!(user.is_active, "new user should be active");
     assert!(!user.is_verified, "new user should not be verified yet");
 
-    // password_hash must be stored but must NOT equal the plain-text password
+    // Password must be stored as a hash, never as plain text
     let hash = user.password_hash.expect("password_hash must be stored");
     assert_ne!(
         hash, "S3cur3P@ssw0rd!",
@@ -94,14 +124,15 @@ async fn test_register_success() {
         "hash should use argon2 or bcrypt, got: {hash}"
     );
 
-    cleanup_user(&service, "alice@example.com").await;
+    cleanup_user(&repo, "alice@example.com").await;
 }
 
 /// Optional fields (username, first_name, last_name) may all be omitted.
 #[tokio::test]
 async fn test_register_minimal_fields() {
-    let service = make_service().await;
-    cleanup_user(&service, "minimal@example.com").await;
+    let repo = make_repo();
+    let service = make_service();
+    cleanup_user(&repo, "minimal@example.com").await;
 
     let req = RegisterRequest {
         email: "minimal@example.com".into(),
@@ -111,30 +142,39 @@ async fn test_register_minimal_fields() {
         last_name: None,
     };
 
-    let user = service
+    let res = service
         .register(req)
         .await
-        .expect("Registration with only email+password should succeed");
+        .expect("Registration with only email + password should succeed");
 
-    assert_eq!(user.email, "minimal@example.com");
+    assert_eq!(res.email, "minimal@example.com");
+    assert!(res.username.is_none());
+
+    let user = repo
+        .find_by_email("minimal@example.com")
+        .await
+        .expect("DB query failed")
+        .expect("user should exist in DB");
+
     assert!(user.username.is_none());
     assert!(user.first_name.is_none());
     assert!(user.last_name.is_none());
 
-    cleanup_user(&service, "minimal@example.com").await;
+    cleanup_user(&repo, "minimal@example.com").await;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Uniqueness constraint tests
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Registering twice with the same email must fail with a duplicate-email error.
+/// Registering twice with the same email must fail with `EmailAlreadyTaken`.
 #[tokio::test]
 async fn test_register_duplicate_email() {
-    let service = make_service().await;
-    cleanup_user(&service, "dup@example.com").await;
+    let repo = make_repo();
+    let service = make_service();
+    cleanup_user(&repo, "dup@example.com").await;
 
-    let req = || RegisterRequest {
+    let make_req = || RegisterRequest {
         email: "dup@example.com".into(),
         password: "ValidP@ss1".into(),
         username: None,
@@ -143,32 +183,31 @@ async fn test_register_duplicate_email() {
     };
 
     service
-        .register(req())
+        .register(make_req())
         .await
         .expect("First registration should succeed");
 
     let err = service
-        .register(req())
+        .register(make_req())
         .await
-        .expect_err("Second registration with same email must fail");
+        .expect_err("Second registration with the same email must fail");
 
-    // The error should clearly indicate a duplicate email.
-    // Adjust the variant name to match your AuthError enum.
     assert!(
-        matches!(err, auth_lib::model::auth::AuthError::DuplicateEmail)
-            || err.to_string().to_lowercase().contains("email"),
-        "Expected a duplicate-email error, got: {err:?}"
+        matches!(err, AuthError::EmailAlreadyTaken),
+        "Expected AuthError::EmailAlreadyTaken, got: {err:?}"
     );
 
-    cleanup_user(&service, "dup@example.com").await;
+    cleanup_user(&repo, "dup@example.com").await;
 }
 
-/// Registering twice with the same username must fail with a duplicate-username error.
+/// Two different emails sharing the same username must fail with
+/// `UsernameAlreadyTaken`.
 #[tokio::test]
 async fn test_register_duplicate_username() {
-    let service = make_service().await;
-    cleanup_user(&service, "user_a@example.com").await;
-    cleanup_user(&service, "user_b@example.com").await;
+    let repo = make_repo();
+    let service = make_service();
+    cleanup_user(&repo, "user_a@example.com").await;
+    cleanup_user(&repo, "user_b@example.com").await;
 
     let first = RegisterRequest {
         email: "user_a@example.com".into(),
@@ -180,7 +219,7 @@ async fn test_register_duplicate_username() {
     let second = RegisterRequest {
         email: "user_b@example.com".into(), // different email
         password: "ValidP@ss1".into(),
-        username: Some("taken_name".into()), // same username
+        username: Some("taken_name".into()), // same username → should fail
         first_name: None,
         last_name: None,
     };
@@ -193,170 +232,135 @@ async fn test_register_duplicate_username() {
     let err = service
         .register(second)
         .await
-        .expect_err("Registration with duplicate username must fail");
+        .expect_err("Registration with a duplicate username must fail");
 
     assert!(
-        matches!(err, auth_lib::model::auth::AuthError::DuplicateUsername)
-            || err.to_string().to_lowercase().contains("username"),
-        "Expected a duplicate-username error, got: {err:?}"
+        matches!(err, AuthError::UsernameAlreadyTaken),
+        "Expected AuthError::UsernameAlreadyTaken, got: {err:?}"
     );
 
-    cleanup_user(&service, "user_a@example.com").await;
-    cleanup_user(&service, "user_b@example.com").await;
+    cleanup_user(&repo, "user_a@example.com").await;
+    cleanup_user(&repo, "user_b@example.com").await;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Validation / input tests
+// Input validation tests  (all caught before any DB round-trip)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// An empty email string must be rejected before hitting the database.
 #[tokio::test]
 async fn test_register_empty_email_rejected() {
-    let service = make_service().await;
-
-    let req = RegisterRequest {
-        email: "".into(),
-        password: "ValidP@ss1".into(),
-        username: None,
-        first_name: None,
-        last_name: None,
-    };
-
-    let err = service
-        .register(req)
+    let err = make_service()
+        .register(RegisterRequest {
+            email: "".into(),
+            password: "ValidP@ss1".into(),
+            username: None,
+            first_name: None,
+            last_name: None,
+        })
         .await
         .expect_err("Empty email must be rejected");
 
     assert!(
-        matches!(err, auth_lib::model::auth::AuthError::InvalidEmail)
-            || err.to_string().to_lowercase().contains("email"),
-        "Expected an invalid-email error, got: {err:?}"
+        matches!(err, AuthError::InvalidEmail(_)),
+        "Expected AuthError::InvalidEmail, got: {err:?}"
     );
 }
 
-/// A malformed email address (no `@`) must be rejected.
 #[tokio::test]
 async fn test_register_malformed_email_rejected() {
-    let service = make_service().await;
-
-    let req = RegisterRequest {
-        email: "not-an-email".into(),
-        password: "ValidP@ss1".into(),
-        username: None,
-        first_name: None,
-        last_name: None,
-    };
-
-    let err = service
-        .register(req)
+    let err = make_service()
+        .register(RegisterRequest {
+            email: "not-an-email".into(),
+            password: "ValidP@ss1".into(),
+            username: None,
+            first_name: None,
+            last_name: None,
+        })
         .await
         .expect_err("Malformed email must be rejected");
 
     assert!(
-        matches!(err, auth_lib::model::auth::AuthError::InvalidEmail)
-            || err.to_string().to_lowercase().contains("email"),
-        "Expected an invalid-email error, got: {err:?}"
+        matches!(err, AuthError::InvalidEmail(_)),
+        "Expected AuthError::InvalidEmail, got: {err:?}"
     );
 }
 
-/// An empty password must be rejected.
-#[tokio::test]
-async fn test_register_empty_password_rejected() {
-    let service = make_service().await;
-
-    let req = RegisterRequest {
-        email: "pw_test@example.com".into(),
-        password: "".into(),
-        username: None,
-        first_name: None,
-        last_name: None,
-    };
-
-    let err = service
-        .register(req)
-        .await
-        .expect_err("Empty password must be rejected");
-
-    assert!(
-        matches!(err, auth_lib::model::auth::AuthError::WeakPassword)
-            || err.to_string().to_lowercase().contains("password"),
-        "Expected a weak/empty-password error, got: {err:?}"
-    );
-}
-
-/// A password that is too short must be rejected.
-#[tokio::test]
-async fn test_register_short_password_rejected() {
-    let service = make_service().await;
-
-    let req = RegisterRequest {
-        email: "short_pw@example.com".into(),
-        password: "abc".into(), // under any reasonable minimum length
-        username: None,
-        first_name: None,
-        last_name: None,
-    };
-
-    let err = service
-        .register(req)
-        .await
-        .expect_err("Too-short password must be rejected");
-
-    assert!(
-        matches!(err, auth_lib::model::auth::AuthError::WeakPassword)
-            || err.to_string().to_lowercase().contains("password"),
-        "Expected a weak-password error, got: {err:?}"
-    );
-}
-
-/// Whitespace-only email must be rejected (not silently trimmed to empty).
 #[tokio::test]
 async fn test_register_whitespace_email_rejected() {
-    let service = make_service().await;
-
-    let req = RegisterRequest {
-        email: "   ".into(),
-        password: "ValidP@ss1".into(),
-        username: None,
-        first_name: None,
-        last_name: None,
-    };
-
-    let err = service
-        .register(req)
+    let err = make_service()
+        .register(RegisterRequest {
+            email: "   ".into(),
+            password: "ValidP@ss1".into(),
+            username: None,
+            first_name: None,
+            last_name: None,
+        })
         .await
         .expect_err("Whitespace-only email must be rejected");
 
     assert!(
-        err.to_string().to_lowercase().contains("email"),
-        "Expected an email-related error, got: {err:?}"
+        matches!(err, AuthError::InvalidEmail(_)),
+        "Expected AuthError::InvalidEmail, got: {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_register_empty_password_rejected() {
+    let err = make_service()
+        .register(RegisterRequest {
+            email: "pw_test@example.com".into(),
+            password: "".into(),
+            username: None,
+            first_name: None,
+            last_name: None,
+        })
+        .await
+        .expect_err("Empty password must be rejected");
+
+    assert!(
+        matches!(err, AuthError::WeakPassword(_)),
+        "Expected AuthError::WeakPassword, got: {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn test_register_short_password_rejected() {
+    let err = make_service()
+        .register(RegisterRequest {
+            email: "short_pw@example.com".into(),
+            password: "abc".into(),
+            username: None,
+            first_name: None,
+            last_name: None,
+        })
+        .await
+        .expect_err("Too-short password must be rejected");
+
+    assert!(
+        matches!(err, AuthError::WeakPassword(_)),
+        "Expected AuthError::WeakPassword, got: {err:?}"
     );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// DB-level constraint guard test
+// DB-level constraint guard
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Even if service-layer validation is bypassed, the DB unique index on `email`
-/// prevents a duplicate row from being committed.
-///
-/// This test inserts a user directly via the repo (skipping service validation)
-/// and then tries to insert the same email again, expecting a storage error.
+/// Even if service-layer validation is bypassed, the `users_email` unique index
+/// in Postgres must reject a duplicate row. Inserts directly via the repo to
+/// confirm the DB is the final line of defence.
 #[tokio::test]
 async fn test_db_unique_index_rejects_duplicate_email() {
-    use auth_lib::{interfaces::user_repo::UserRepo, model::user::NewUser};
-
-    let service = make_service().await;
-    let repo = service.user_repo();
-    cleanup_user(&service, "idx@example.com").await;
+    let repo = make_repo();
+    cleanup_user(&repo, "idx@example.com").await;
 
     let new_user = NewUser {
         email: "idx@example.com".into(),
-        password_hash: Some("hashed".into()),
+        password_hash: "argon2_hashed_value".into(), // String, not Option<String>
+        jwt_secret: "some-random-secret".into(),     // required — not nullable in schema
         username: None,
         first_name: None,
         last_name: None,
-        avatar_url: None,
     };
 
     repo.create(new_user.clone())
@@ -366,13 +370,13 @@ async fn test_db_unique_index_rejects_duplicate_email() {
     let err = repo
         .create(new_user)
         .await
-        .expect_err("Second insert with same email must fail at the DB level");
+        .expect_err("Second insert with the same email must fail at DB level");
 
     let msg = err.to_string().to_lowercase();
     assert!(
         msg.contains("unique") || msg.contains("duplicate") || msg.contains("email"),
-        "Expected a DB uniqueness error, got: {err:?}"
+        "Expected a DB uniqueness violation, got: {err:?}"
     );
 
-    cleanup_user(&service, "idx@example.com").await;
+    cleanup_user(&repo, "idx@example.com").await;
 }
