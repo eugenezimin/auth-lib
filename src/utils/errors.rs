@@ -1,1 +1,62 @@
+/// Auth-domain error types.
+///
+/// This module defines every error variant that auth operations can produce.
+/// `impl` blocks (e.g. `Display`, `Error`, `From`) belong here too because
+/// this is the *utils* layer — the right home for cross-cutting concerns.
 
+// ── Error type ────────────────────────────────────────────────────────────────
+
+/// All errors that can arise from auth-service operations.
+#[derive(Debug)]
+pub enum AuthError {
+    /// A user with the given email already exists.
+    EmailAlreadyTaken,
+
+    /// A user with the given username already exists.
+    UsernameAlreadyTaken,
+
+    /// The supplied email address did not pass format validation.
+    InvalidEmail(String),
+
+    /// The supplied password did not meet complexity requirements.
+    WeakPassword(String),
+
+    /// Credentials were valid but the account has been deactivated.
+    AccountDisabled,
+
+    /// Credentials were valid but the account has not been verified.
+    AccountNotVerified,
+
+    /// Password hashing or verification failed.
+    HashingError(String),
+
+    /// An unexpected database error occurred.
+    DatabaseError(String),
+
+    /// A catch-all for unexpected internal failures.
+    Internal(String),
+}
+
+// ── Display ───────────────────────────────────────────────────────────────────
+
+impl std::fmt::Display for AuthError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EmailAlreadyTaken => write!(f, "email address is already registered"),
+            Self::UsernameAlreadyTaken => write!(f, "username is already taken"),
+            Self::InvalidEmail(reason) => write!(f, "invalid email address: {reason}"),
+            Self::WeakPassword(reason) => {
+                write!(f, "password does not meet requirements: {reason}")
+            }
+            Self::AccountDisabled => write!(f, "account is disabled"),
+            Self::AccountNotVerified => write!(f, "account has not been verified"),
+            Self::HashingError(msg) => write!(f, "password hashing error: {msg}"),
+            Self::DatabaseError(msg) => write!(f, "database error: {msg}"),
+            Self::Internal(msg) => write!(f, "internal error: {msg}"),
+        }
+    }
+}
+
+// ── std::error::Error ─────────────────────────────────────────────────────────
+
+impl std::error::Error for AuthError {}
