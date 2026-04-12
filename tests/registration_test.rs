@@ -347,9 +347,11 @@ async fn test_db_unique_index_rejects_duplicate_email() {
         .await
         .expect_err("Second insert with the same email must fail at DB level");
 
-    let msg = err.to_string().to_lowercase();
     assert!(
-        msg.contains("unique") || msg.contains("duplicate") || msg.contains("email"),
+        matches!(err, AuthError::EmailAlreadyTaken) || {
+            let msg = err.to_string().to_lowercase();
+            msg.contains("unique") || msg.contains("duplicate") || msg.contains("email")
+        },
         "Expected a DB uniqueness violation, got: {err:?}"
     );
 

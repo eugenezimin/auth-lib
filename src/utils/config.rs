@@ -71,6 +71,12 @@ impl Config {
     /// # Panics
     /// Panics if called more than once.
     pub fn init_with(loader: impl ConfigLoader) -> Result<&'static Self, ConfigError> {
+        // If already initialized, return the existing config — makes this
+        // idempotent and safe to call from parallel test functions.
+        if let Some(existing) = CONFIG.get() {
+            return Ok(existing);
+        }
+
         let raw = loader.load()?;
         let (database, jwt, server) = raw.into_parts()?;
 
@@ -80,11 +86,9 @@ impl Config {
             server,
         };
 
-        CONFIG
-            .set(cfg)
-            .expect("Config::init / Config::init_with called more than once");
-
-        Ok(CONFIG.get().unwrap())
+        // OnceLock::get_or_init handles the race: if two threads reach here
+        // simultaneously, only one cfg is stored and both get the same reference.
+        Ok(CONFIG.get_or_init(|| cfg))
     }
 
     /// Return a reference to the global [`Config`].

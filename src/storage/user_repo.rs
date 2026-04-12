@@ -87,22 +87,28 @@ impl UserRepo for PgUserRepo {
                     &new_user.email,
                     &new_user.password_hash,
                     &new_user.jwt_secret,
-                    &new_user.username.unwrap_or_default(),
-                    &new_user.first_name.unwrap_or_default(),
-                    &new_user.last_name.unwrap_or_default(),
+                    &new_user.username,
+                    &new_user.first_name,
+                    &new_user.last_name,
                 ],
             )
             .await
             .map_err(|e| {
-                // Distinguish unique-constraint violations so the service can
-                // surface a user-facing error rather than a generic DB error.
                 let msg = e.to_string();
-                if msg.contains("users_email") {
+                // tokio-postgres puts constraint details in the source DbError
+                let detail = e
+                    .as_db_error()
+                    .map(|db| db.constraint().unwrap_or(""))
+                    .unwrap_or("");
+
+                if detail.contains("users_email") || msg.contains("users_email") {
                     AuthError::EmailAlreadyTaken
-                } else if msg.contains("users_username_key") {
+                } else if detail.contains("users_username_key")
+                    || msg.contains("users_username_key")
+                {
                     AuthError::UsernameAlreadyTaken
                 } else {
-                    AuthError::DatabaseError(msg)
+                    AuthError::DatabaseError(format!("{msg} | constraint: {detail}"))
                 }
             })?;
 
