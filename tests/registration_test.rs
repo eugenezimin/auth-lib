@@ -18,7 +18,7 @@ use auth_lib::{
     auth::register::AuthServiceImpl,
     interfaces::{auth::AuthService, storage::user_repo::UserRepo},
     model::{
-        config::Config,
+        config::{Config, DirectLoader, RawConfig},
         storage::postgres::PgUserRepo,
         user::{NewUser, RegisterRequest, RegisterResponse},
     },
@@ -34,7 +34,23 @@ fn init_config() -> &'static Config {
     if Config::is_initialized() {
         return Config::global();
     }
-    Config::init().expect("Failed to load config from environment")
+
+    // Initialize the global Config using the DirectLoader with our RawConfig.
+    Config::init_with(DirectLoader::new(
+        RawConfig::default()
+            .db_host("localhost")
+            .db_port(5432)
+            .db_user("postgres")
+            .db_password("passw")
+            .db_name("auth")
+            .db_max_pool_size(20)
+            .db_connect_timeout_secs(10)
+            .jwt_secret("my-very-long-jwt-signing-secret")
+            .jwt_access_expiry_secs(900) // 15 min
+            .jwt_refresh_expiry_secs(604_800) // 7 days
+            .jwt_issuer("auth-lib-test"),
+    ))
+    .expect("Failed to load config from environment")
 }
 
 /// Build a fresh `AuthServiceImpl` backed by a real Postgres pool.
@@ -57,7 +73,8 @@ fn make_repo() -> PgUserRepo {
 /// The FK `ON DELETE CASCADE` on `sessions` and `user_roles` handles cleanup
 /// of related rows automatically.
 async fn cleanup_user(repo: &PgUserRepo, email: &str) {
-    if let Ok(Some(_)) = repo.find_by_email(email).await {
+    let u_exists = repo.find_by_email(email).await;
+    if let Ok(Some(_)) = u_exists {
         let client = repo.pg_pool.get().await.expect("pool get failed");
         client
             .execute("DELETE FROM users WHERE email = $1", &[&email])

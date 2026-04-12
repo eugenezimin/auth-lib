@@ -90,9 +90,9 @@ impl UserRepo for PgUserRepo {
                     &new_user.email,
                     &new_user.password_hash,
                     &new_user.jwt_secret,
-                    &new_user.username,
-                    &new_user.first_name,
-                    &new_user.last_name,
+                    &new_user.username.unwrap_or_default(),
+                    &new_user.first_name.unwrap_or_default(),
+                    &new_user.last_name.unwrap_or_default(),
                 ],
             )
             .await
@@ -126,25 +126,35 @@ async fn get_client(pool: &Pool) -> Result<deadpool_postgres::Client, AuthError>
 ///
 /// Column order must match every `SELECT` / `RETURNING` clause in this file.
 fn row_to_user(row: Row) -> User {
-    let id: u32 = row.get("id");
-    let created_at: String = row.get("created_at");
-    let updated_at: String = row.get("updated_at");
+    if row.is_empty() {
+        AuthError::DatabaseError("attempted to map empty row to User".to_string());
+    }
+
+    let id = row.get("id");
+    let email = row.get::<_, String>("email");
+    let password_hash = row.get::<_, Option<String>>("password_hash");
+    let jwt_secret = row.get::<_, Option<String>>("jwt_secret");
+    let username = row.get::<_, Option<String>>("username");
+    let first_name = row.get::<_, Option<String>>("first_name");
+    let last_name = row.get::<_, Option<String>>("last_name");
+    let avatar_url = row.get::<_, Option<String>>("avatar_url");
+    let is_active = row.get::<_, bool>("is_active");
+    let is_verified = row.get::<_, bool>("is_verified");
+    let created_at = row.get::<_, &str>("created_at");
+    let updated_at = row.get::<_, &str>("updated_at");
+
     User {
         id: uuid::Uuid::from_u128(id as u128),
-        email: row.get("email"),
-        password_hash: row.get("password_hash"),
-        jwt_secret: row.get("jwt_secret"),
-        username: row.get("username"),
-        first_name: row.get("first_name"),
-        last_name: row.get("last_name"),
-        avatar_url: row.get("avatar_url"),
-        is_active: row.get("is_active"),
-        is_verified: row.get("is_verified"),
-        created_at: chrono::DateTime::parse_from_rfc3339(&created_at)
-            .unwrap()
-            .with_timezone(&chrono::Utc),
-        updated_at: chrono::DateTime::parse_from_rfc3339(&updated_at)
-            .unwrap()
-            .with_timezone(&chrono::Utc),
+        email,
+        password_hash,
+        jwt_secret,
+        username,
+        first_name,
+        last_name,
+        avatar_url,
+        is_active,
+        is_verified,
+        created_at: created_at.parse().expect("invalid [created_at] timestamp"),
+        updated_at: updated_at.parse().expect("invalid [updated_at] timestamp"),
     }
 }
