@@ -26,8 +26,6 @@ use auth_lib::{
     utils::errors::AuthError,
 };
 
-// ── Test helpers ──────────────────────────────────────────────────────────────
-
 /// Initialize config once from env / `.env`.
 /// `OnceLock` inside `Config` means only the first call does real work.
 fn init_config() -> &'static Config {
@@ -82,8 +80,6 @@ async fn cleanup_user(repo: &PgUserRepo, email: &str) {
             .expect("cleanup DELETE failed");
     }
 }
-
-// ── Request builder ───────────────────────────────────────────────────────────
 
 fn valid_request() -> RegisterRequest {
     RegisterRequest {

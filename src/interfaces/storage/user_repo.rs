@@ -42,8 +42,6 @@ use async_trait::async_trait;
 use crate::model::user::{NewUser, User};
 use crate::utils::errors::AuthError;
 
-// ── Trait ─────────────────────────────────────────────────────────────────────
-
 /// Persistence contract for the `users` table.
 ///
 /// All methods map to discrete, single-responsibility database operations.
