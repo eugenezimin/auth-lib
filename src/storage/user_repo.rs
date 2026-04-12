@@ -140,8 +140,8 @@ fn row_to_user(row: Row) -> User {
     let avatar_url = row.get::<_, Option<String>>("avatar_url");
     let is_active = row.get::<_, bool>("is_active");
     let is_verified = row.get::<_, bool>("is_verified");
-    let created_at = row.get::<_, &str>("created_at");
-    let updated_at = row.get::<_, &str>("updated_at");
+    let created_at = row.get("created_at");
+    let updated_at = row.get::<_, chrono::DateTime<chrono::Utc>>("updated_at");
 
     User {
         id,
@@ -154,7 +154,7 @@ fn row_to_user(row: Row) -> User {
         avatar_url,
         is_active,
         is_verified,
-        created_at: created_at.parse().expect("invalid [created_at] timestamp"),
-        updated_at: updated_at.parse().expect("invalid [updated_at] timestamp"),
+        created_at,
+        updated_at,
     }
 }

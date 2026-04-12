@@ -8,8 +8,11 @@
 SET FOREIGN_KEY_CHECKS = 0;
 
 DROP TABLE IF EXISTS `sessions` CASCADE;
+
 DROP TABLE IF EXISTS `user_roles` CASCADE;
+
 DROP TABLE IF EXISTS `users` CASCADE;
+
 DROP TABLE IF EXISTS `roles` CASCADE;
 
 SET FOREIGN_KEY_CHECKS = 1;
@@ -75,7 +78,10 @@ CREATE TABLE `user_roles` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- Indices for sessions
-CREATE INDEX `idx_sessions_user_id`      ON `sessions` (`user_id`);
+CREATE INDEX `idx_sessions_user_id` ON `sessions` (`user_id`);
+
 CREATE INDEX `idx_sessions_access_token`  ON `sessions` (`access_token`(255));
+
 CREATE INDEX `idx_sessions_refresh_token` ON `sessions` (`refresh_token`(255));
+
 CREATE INDEX `idx_sessions_user_id_expires` ON `sessions` (`user_id`, `access_expires_at` DESC);
