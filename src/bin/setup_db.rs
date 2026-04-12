@@ -11,8 +11,8 @@
 
 use std::io::{self, Write};
 
+use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
-use sqlx::{PgPool, Row};
 
 // ── SQL file path ─────────────────────────────────────────────────────────────
 

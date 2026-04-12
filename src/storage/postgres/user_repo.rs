@@ -6,11 +6,9 @@
 ///
 /// Uses the non-macro `sqlx::query_as` API so no `DATABASE_URL` is
 /// required at compile time.
-use sqlx::FromRow;
-
-use crate::interfaces::user_repo::UserRepo;
+use crate::interfaces::db::user_repo::UserRepo;
 use crate::model::user::{NewUser, User};
-use crate::storage::pg_pool::PgUserRepo;
+use crate::storage::postgres::pg_pool::PgUserRepo;
 use crate::storage::queries::user_queries;
 use crate::utils::errors::AuthError;
 
@@ -20,18 +18,16 @@ impl PgUserRepo {
     }
 }
 
-// ── UserRepo impl ─────────────────────────────────────────────────────────────
-
 #[async_trait::async_trait]
 impl UserRepo for PgUserRepo {
     async fn find_by_email(&self, email: &str) -> Result<Option<User>, AuthError> {
-        let row = sqlx::query_as::<_, UserRow>(user_queries::FIND_USER_BY_EMAIL)
+        let user: Option<User> = sqlx::query_as(user_queries::FIND_USER_BY_EMAIL)
             .bind(email)
             .fetch_optional(&self.pg_pool)
             .await
             .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
 
-        Ok(row.map(UserRow::into_user))
+        Ok(user)
     }
 
     async fn exists_by_email(&self, email: &str) -> Result<bool, AuthError> {
@@ -55,7 +51,7 @@ impl UserRepo for PgUserRepo {
     }
 
     async fn create(&self, new_user: NewUser) -> Result<User, AuthError> {
-        let row = sqlx::query_as::<_, UserRow>(user_queries::INSERT_USER)
+        let user = sqlx::query_as(user_queries::INSERT_USER)
             .bind(&new_user.email)
             .bind(&new_user.password_hash)
             .bind(&new_user.jwt_secret)
@@ -66,11 +62,9 @@ impl UserRepo for PgUserRepo {
             .await
             .map_err(map_sqlx_error)?;
 
-        Ok(row.into_user())
+        Ok(user)
     }
 }
-
-// ── Error mapping ─────────────────────────────────────────────────────────────
 
 /// Map a sqlx error to a domain [`AuthError`].
 ///
@@ -88,46 +82,4 @@ fn map_sqlx_error(e: sqlx::Error) -> AuthError {
         }
     }
     AuthError::DatabaseError(e.to_string())
-}
-
-// ── Row type ──────────────────────────────────────────────────────────────────
-
-/// Intermediate struct that sqlx maps query results into.
-///
-/// `FromRow` is derived so sqlx maps column names to fields automatically.
-/// We then convert to the domain [`User`] type via `into_user` to keep
-/// the domain model free of sqlx dependencies.
-#[derive(FromRow)]
-struct UserRow {
-    id: uuid::Uuid,
-    email: String,
-    password_hash: Option<String>,
-    jwt_secret: Option<String>,
-    username: Option<String>,
-    first_name: Option<String>,
-    last_name: Option<String>,
-    avatar_url: Option<String>,
-    is_active: bool,
-    is_verified: bool,
-    created_at: chrono::DateTime<chrono::Utc>,
-    updated_at: chrono::DateTime<chrono::Utc>,
-}
-
-impl UserRow {
-    fn into_user(self) -> User {
-        User {
-            id: self.id,
-            email: self.email,
-            password_hash: self.password_hash,
-            jwt_secret: self.jwt_secret,
-            username: self.username,
-            first_name: self.first_name,
-            last_name: self.last_name,
-            avatar_url: self.avatar_url,
-            is_active: self.is_active,
-            is_verified: self.is_verified,
-            created_at: self.created_at,
-            updated_at: self.updated_at,
-        }
-    }
 }

@@ -5,8 +5,6 @@
 /// all loader traits and loader structs live in [`crate::interfaces::config`].
 use std::time::Duration;
 
-// ── Root config ───────────────────────────────────────────────────────────────
-
 /// Root configuration object available application-wide.
 ///
 /// Obtain via [`Config::init`] or [`Config::init_with`], then read anywhere
@@ -17,8 +15,6 @@ pub struct Config {
     pub jwt: JwtConfig,
     pub server: ServerConfig,
 }
-
-// ── Sub-configs ───────────────────────────────────────────────────────────────
 
 /// PostgreSQL connection settings.
 #[derive(Debug, Clone)]
@@ -56,8 +52,6 @@ pub struct ServerConfig {
     pub max_body_bytes: usize,
 }
 
-// ── Error type ────────────────────────────────────────────────────────────────
-
 #[derive(Debug)]
 pub enum ConfigError {
     /// A required field / environment variable was not set.
@@ -65,8 +59,6 @@ pub enum ConfigError {
     /// A value was present but could not be parsed into the expected type.
     Parse { key: String, reason: String },
 }
-
-// ── Raw (unvalidated) config ──────────────────────────────────────────────────
 
 /// A flat, fully optional snapshot of every configuration knob.
 ///
@@ -78,7 +70,6 @@ pub enum ConfigError {
 /// or use the chainable builder helpers on this struct.
 #[derive(Debug, Clone, Default)]
 pub struct RawConfig {
-    // ── Database ──────────────────────────────────────────────────────────────
     pub db_host: Option<String>,
     pub db_port: Option<u16>,
     pub db_user: Option<String>,
@@ -87,13 +78,11 @@ pub struct RawConfig {
     pub db_max_pool_size: Option<u32>,
     pub db_connect_timeout_secs: Option<u64>,
 
-    // ── JWT ───────────────────────────────────────────────────────────────────
     pub jwt_secret: Option<String>,
     pub jwt_access_expiry_secs: Option<u64>,
     pub jwt_refresh_expiry_secs: Option<u64>,
     pub jwt_issuer: Option<String>,
 
-    // ── Server ────────────────────────────────────────────────────────────────
     pub server_host: Option<String>,
     pub server_port: Option<u16>,
     pub server_max_body_bytes: Option<usize>,

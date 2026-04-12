@@ -17,7 +17,7 @@ use uuid::Uuid;
 
 use crate::auth::password;
 use crate::interfaces::auth::AuthService;
-use crate::interfaces::user_repo::UserRepo;
+use crate::interfaces::db::user_repo::UserRepo;
 use crate::model::user::{NewUser, RegisterRequest, RegisterResponse};
 use crate::utils::errors::AuthError;
 

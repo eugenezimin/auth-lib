@@ -1,3 +1,2 @@
-pub mod pg_pool;
+pub mod postgres;
 pub mod queries;
-pub mod user_repo;

@@ -16,12 +16,12 @@ use std::sync::Arc;
 
 use auth_lib::{
     auth::register::AuthServiceImpl,
-    interfaces::{auth::AuthService, config::DirectLoader, user_repo::UserRepo},
+    interfaces::{auth::AuthService, config::DirectLoader, db::user_repo::UserRepo},
     model::{
         config::{Config, RawConfig},
         user::{NewUser, RegisterRequest, RegisterResponse},
     },
-    storage::pg_pool::{PgUserRepo, build_pool},
+    storage::postgres::pg_pool::{PgUserRepo, build_pool},
     utils::errors::AuthError,
 };
 
