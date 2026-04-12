@@ -1,15 +1,10 @@
-use auth_lib::model::config::{Config, DirectLoader, RawConfig};
+use auth_lib::{
+    interfaces::config::DirectLoader,
+    model::config::{Config, RawConfig},
+};
 
 #[test]
-/// A simple test to verify that the DirectLoader correctly populates the Config
-/// struct from a RawConfig, and that all the getters and derived fields work as expected.
-/// This also serves as a usage example for the library's configuration system.
-/// Note: this test does not cover the EnvLoader or error handling; those are tested separately.
-/// To run this test, use `[cargo test config_direct_load]`.
 fn config_direct_load() {
-    // Create a RawConfig with all fields set, using the builder helpers for convenience.
-    // In a real application, you might only set a few fields and rely on defaults for the rest.
-    // The values here are arbitrary and just for demonstration purposes.
     let configuration = RawConfig::default()
         .db_host("localhost")
         .db_port(5432)
@@ -19,21 +14,18 @@ fn config_direct_load() {
         .db_max_pool_size(20)
         .db_connect_timeout_secs(10)
         .jwt_secret("my-very-long-jwt-signing-secret")
-        .jwt_access_expiry_secs(900) // 15 min
-        .jwt_refresh_expiry_secs(604_800) // 7 days
+        .jwt_access_expiry_secs(900)
+        .jwt_refresh_expiry_secs(604_800)
         .jwt_issuer("auth-lib-test")
         .server_host("0.0.0.0")
         .server_port(8080)
-        .server_max_body_bytes(2_097_152); // 2 MiB
+        .server_max_body_bytes(2_097_152);
 
-    // Initialize the global Config using the DirectLoader with our RawConfig.
     let cfg =
         Config::init_with(DirectLoader::new(configuration)).expect("Config::init_with failed");
 
-    // Verify that the global Config is now initialized and contains the expected values.
     assert!(Config::is_initialized());
 
-    // Print out the loaded configuration for manual verification (optional).
     println!("=== DatabaseConfig ===");
     println!("  host              : {}", cfg.database.host);
     println!("  port              : {}", cfg.database.port);
@@ -45,7 +37,6 @@ fn config_direct_load() {
     println!("  connection_string : {}", cfg.database.connection_string());
     println!("  connection_url    : {}", cfg.database.connection_url());
 
-    // Print out the JWT configuration for manual verification (optional).
     println!("=== JwtConfig ===");
     println!("  secret                : {}", cfg.jwt.secret);
     println!(
@@ -63,14 +54,12 @@ fn config_direct_load() {
         cfg.jwt.refresh_expiry_secs()
     );
 
-    // Print out the server configuration for manual verification (optional).
     println!("=== ServerConfig ===");
     println!("  host            : {}", cfg.server.host);
     println!("  port            : {}", cfg.server.port);
     println!("  max_body_bytes  : {}", cfg.server.max_body_bytes);
     println!("  bind_address()  : {}", cfg.server.bind_address());
 
-    // Assert that the values in the global Config match what we set in the RawConfig.
     let global = Config::global();
     assert_eq!(global.database.host, "localhost");
     assert_eq!(global.jwt.issuer, "auth-lib-test");

@@ -1,5 +1,3 @@
-use std::default;
-
 /// Password hashing and verification.
 ///
 /// Uses Argon2id (memory-hard, recommended for password storage) via the

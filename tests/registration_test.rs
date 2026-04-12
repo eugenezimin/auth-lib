@@ -16,13 +16,12 @@ use std::sync::Arc;
 
 use auth_lib::{
     auth::register::AuthServiceImpl,
-    interfaces::{auth::AuthService, storage::user_repo::UserRepo},
+    interfaces::{auth::AuthService, config::DirectLoader, user_repo::UserRepo},
     model::{
-        config::{Config, DirectLoader, RawConfig},
-        storage::postgres::PgUserRepo,
+        config::{Config, RawConfig},
         user::{NewUser, RegisterRequest, RegisterResponse},
     },
-    storage::pg_pool::build_pool,
+    storage::pg_pool::{PgUserRepo, build_pool},
     utils::errors::AuthError,
 };
 
@@ -33,7 +32,6 @@ fn init_config() -> &'static Config {
         return Config::global();
     }
 
-    // Initialize the global Config using the DirectLoader with our RawConfig.
     Config::init_with(DirectLoader::new(
         RawConfig::default()
             .db_host("localhost")
@@ -44,15 +42,14 @@ fn init_config() -> &'static Config {
             .db_max_pool_size(20)
             .db_connect_timeout_secs(10)
             .jwt_secret("my-very-long-jwt-signing-secret")
-            .jwt_access_expiry_secs(900) // 15 min
-            .jwt_refresh_expiry_secs(604_800) // 7 days
+            .jwt_access_expiry_secs(900)
+            .jwt_refresh_expiry_secs(604_800)
             .jwt_issuer("auth-lib-test"),
     ))
     .expect("Failed to load config from environment")
 }
 
 /// Build a fresh `AuthServiceImpl` backed by a real Postgres pool.
-/// `build_pool` is synchronous — no `.await` needed.
 fn make_service() -> AuthServiceImpl {
     let cfg = init_config();
     let pool = build_pool(&cfg.database).expect("Failed to build DB pool");
@@ -68,8 +65,6 @@ fn make_repo() -> PgUserRepo {
 }
 
 /// Delete a user by email so each test can start from a known state.
-/// The FK `ON DELETE CASCADE` on `sessions` and `user_roles` handles cleanup
-/// of related rows automatically.
 async fn cleanup_user(repo: &PgUserRepo, email: &str) {
     let u_exists = repo.find_by_email(email).await;
     if let Ok(Some(_)) = u_exists {
@@ -95,9 +90,6 @@ fn valid_request() -> RegisterRequest {
 // Happy-path tests
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// A valid registration should succeed and return a `RegisterResponse`.
-/// We then fetch the row directly from the DB to assert all fields were
-/// persisted correctly — `register()` only returns the non-sensitive summary.
 #[tokio::test]
 async fn test_register_success() {
     let repo = make_repo();
@@ -109,12 +101,10 @@ async fn test_register_success() {
         .await
         .expect("Registration should succeed");
 
-    // Response fields
     assert!(!res.user_id.to_string().is_empty(), "user_id must be set");
     assert_eq!(res.email, "alice@example.com");
     assert_eq!(res.username, Some("alice".into()));
 
-    // Confirm the full row in the DB
     let user = repo
         .find_by_email("alice@example.com")
         .await
@@ -126,7 +116,6 @@ async fn test_register_success() {
     assert!(user.is_active, "new user should be active");
     assert!(!user.is_verified, "new user should not be verified yet");
 
-    // Password must be stored as a hash, never as plain text
     let hash = user.password_hash.expect("password_hash must be stored");
     assert_ne!(
         hash, "S3cur3P@ssw0rd!",
@@ -140,7 +129,6 @@ async fn test_register_success() {
     cleanup_user(&repo, "alice@example.com").await;
 }
 
-/// Optional fields (username, first_name, last_name) may all be omitted.
 #[tokio::test]
 async fn test_register_minimal_fields() {
     let repo = make_repo();
@@ -180,7 +168,6 @@ async fn test_register_minimal_fields() {
 // Uniqueness constraint tests
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Registering twice with the same email must fail with `EmailAlreadyTaken`.
 #[tokio::test]
 async fn test_register_duplicate_email() {
     let repo = make_repo();
@@ -213,8 +200,6 @@ async fn test_register_duplicate_email() {
     cleanup_user(&repo, "dup@example.com").await;
 }
 
-/// Two different emails sharing the same username must fail with
-/// `UsernameAlreadyTaken`.
 #[tokio::test]
 async fn test_register_duplicate_username() {
     let repo = make_repo();
@@ -230,9 +215,9 @@ async fn test_register_duplicate_username() {
         last_name: None,
     };
     let second = RegisterRequest {
-        email: "user_b@example.com".into(), // different email
+        email: "user_b@example.com".into(),
         password: "ValidP@ss1".into(),
-        username: Some("taken_name".into()), // same username → should fail
+        username: Some("taken_name".into()),
         first_name: None,
         last_name: None,
     };
@@ -257,7 +242,7 @@ async fn test_register_duplicate_username() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Input validation tests  (all caught before any DB round-trip)
+// Input validation tests
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[tokio::test]
@@ -272,11 +257,7 @@ async fn test_register_empty_email_rejected() {
         })
         .await
         .expect_err("Empty email must be rejected");
-
-    assert!(
-        matches!(err, AuthError::InvalidEmail(_)),
-        "Expected AuthError::InvalidEmail, got: {err:?}"
-    );
+    assert!(matches!(err, AuthError::InvalidEmail(_)));
 }
 
 #[tokio::test]
@@ -291,11 +272,7 @@ async fn test_register_malformed_email_rejected() {
         })
         .await
         .expect_err("Malformed email must be rejected");
-
-    assert!(
-        matches!(err, AuthError::InvalidEmail(_)),
-        "Expected AuthError::InvalidEmail, got: {err:?}"
-    );
+    assert!(matches!(err, AuthError::InvalidEmail(_)));
 }
 
 #[tokio::test]
@@ -310,11 +287,7 @@ async fn test_register_whitespace_email_rejected() {
         })
         .await
         .expect_err("Whitespace-only email must be rejected");
-
-    assert!(
-        matches!(err, AuthError::InvalidEmail(_)),
-        "Expected AuthError::InvalidEmail, got: {err:?}"
-    );
+    assert!(matches!(err, AuthError::InvalidEmail(_)));
 }
 
 #[tokio::test]
@@ -329,11 +302,7 @@ async fn test_register_empty_password_rejected() {
         })
         .await
         .expect_err("Empty password must be rejected");
-
-    assert!(
-        matches!(err, AuthError::WeakPassword(_)),
-        "Expected AuthError::WeakPassword, got: {err:?}"
-    );
+    assert!(matches!(err, AuthError::WeakPassword(_)));
 }
 
 #[tokio::test]
@@ -348,20 +317,13 @@ async fn test_register_short_password_rejected() {
         })
         .await
         .expect_err("Too-short password must be rejected");
-
-    assert!(
-        matches!(err, AuthError::WeakPassword(_)),
-        "Expected AuthError::WeakPassword, got: {err:?}"
-    );
+    assert!(matches!(err, AuthError::WeakPassword(_)));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DB-level constraint guard
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Even if service-layer validation is bypassed, the `users_email` unique index
-/// in Postgres must reject a duplicate row. Inserts directly via the repo to
-/// confirm the DB is the final line of defence.
 #[tokio::test]
 async fn test_db_unique_index_rejects_duplicate_email() {
     let repo = make_repo();
@@ -369,8 +331,8 @@ async fn test_db_unique_index_rejects_duplicate_email() {
 
     let new_user = NewUser {
         email: "idx@example.com".into(),
-        password_hash: "argon2_hashed_value".into(), // String, not Option<String>
-        jwt_secret: "some-random-secret".into(),     // required — not nullable in schema
+        password_hash: "argon2_hashed_value".into(),
+        jwt_secret: "some-random-secret".into(),
         username: None,
         first_name: None,
         last_name: None,

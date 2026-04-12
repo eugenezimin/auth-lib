@@ -27,6 +27,21 @@ impl std::fmt::Display for PoolBuildError {
 
 impl std::error::Error for PoolBuildError {}
 
+/// PostgreSQL-backed user repository.
+///
+/// Construct with a shared [`Pool`] and pass it (behind an `Arc`) to the
+/// service layer:
+///
+/// ```rust,ignore
+/// use std::sync::Arc;
+/// use auth_lib::storage::pg_pool::PgUserRepo;
+///
+/// let repo = Arc::new(PgUserRepo::new(pool.clone()));
+/// ```
+pub struct PgUserRepo {
+    pub pg_pool: Pool,
+}
+
 /// Build a `deadpool-postgres` connection pool from a [`DatabaseConfig`].
 ///
 /// Call this **once** at startup and store the resulting `Pool` in an `Arc`
@@ -44,7 +59,7 @@ impl std::error::Error for PoolBuildError {}
 ///
 /// ```rust,ignore
 /// use std::sync::Arc;
-/// use auth_lib::storage::pool::build_pool;
+/// use auth_lib::storage::pg_pool::build_pool;
 /// use auth_lib::model::config::Config;
 ///
 /// Config::init().expect("config failed");

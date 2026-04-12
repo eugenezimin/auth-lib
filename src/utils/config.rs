@@ -39,10 +39,9 @@
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use crate::interfaces::config::ConfigLoader;
-use crate::model::config::{
-    Config, ConfigError, DatabaseConfig, DirectLoader, EnvLoader, JwtConfig, RawConfig,
-    ServerConfig,
+use crate::{
+    interfaces::config::{ConfigLoader, DirectLoader, EnvLoader},
+    model::config::{Config, ConfigError, DatabaseConfig, JwtConfig, RawConfig, ServerConfig},
 };
 
 // ── Global singleton ──────────────────────────────────────────────────────────

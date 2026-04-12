@@ -17,7 +17,7 @@ use uuid::Uuid;
 
 use crate::auth::password;
 use crate::interfaces::auth::AuthService;
-use crate::interfaces::storage::user_repo::UserRepo;
+use crate::interfaces::user_repo::UserRepo;
 use crate::model::user::{NewUser, RegisterRequest, RegisterResponse};
 use crate::utils::errors::AuthError;
 
@@ -27,8 +27,8 @@ use crate::utils::errors::AuthError;
 ///
 /// ```rust,ignore
 /// use std::sync::Arc;
-/// use auth_lib::auth::service::AuthServiceImpl;
-/// use auth_lib::storage::user_repo::PgUserRepo;
+/// use auth_lib::auth::register::AuthServiceImpl;
+/// use auth_lib::storage::pg_pool::PgUserRepo;
 ///
 /// let repo = Arc::new(PgUserRepo::new(pool.clone()));
 /// let auth = Arc::new(AuthServiceImpl::new(repo));
@@ -52,14 +52,13 @@ impl AuthService for AuthServiceImpl {
     /// ```text
     /// RegisterRequest
     ///       │
-    ///       ├─ 1. validate_email()       → AuthError::InvalidEmail
-    ///       ├─ 2. validate_password()    → AuthError::WeakPassword
-    ///       ├─ 3. repo.exists_by_email() → AuthError::EmailAlreadyTaken
-    ///       ├─ 4. repo.exists_by_username() (if username supplied)
-    ///       │                            → AuthError::UsernameAlreadyTaken
-    ///       ├─ 5. password::hash()       → AuthError::HashingError
+    ///       ├─ 1. validate_email()          → AuthError::InvalidEmail
+    ///       ├─ 2. validate_password()       → AuthError::WeakPassword
+    ///       ├─ 3. repo.exists_by_email()    → AuthError::EmailAlreadyTaken
+    ///       ├─ 4. repo.exists_by_username() → AuthError::UsernameAlreadyTaken
+    ///       ├─ 5. password::hash()          → AuthError::HashingError
     ///       ├─ 6. generate jwt_secret
-    ///       ├─ 7. repo.create(NewUser)   → AuthError::DatabaseError
+    ///       ├─ 7. repo.create(NewUser)      → AuthError::DatabaseError
     ///       │
     ///       └─ RegisterResponse { user_id, email, username }
     /// ```
@@ -103,10 +102,6 @@ impl AuthService for AuthServiceImpl {
 }
 
 /// Basic email format validation.
-///
-/// Checks for the presence of exactly one `@` with non-empty local and domain
-/// parts, and at least one `.` in the domain.  A full RFC 5322 parser is
-/// intentionally overkill here — the database unique index is the real guard.
 fn validate_email(email: &str) -> Result<(), AuthError> {
     let parts: Vec<&str> = email.splitn(2, '@').collect();
 
@@ -126,11 +121,6 @@ fn validate_email(email: &str) -> Result<(), AuthError> {
 }
 
 /// Minimum password strength requirements.
-///
-/// Current rules (deliberately minimal — tighten as your policy demands):
-/// - At least 8 characters
-/// - At least one uppercase letter
-/// - At least one digit
 fn validate_password(password: &str) -> Result<(), AuthError> {
     if password.len() < 8 {
         return Err(AuthError::WeakPassword(
@@ -248,7 +238,7 @@ mod tests {
             Ok(None)
         }
         async fn exists_by_email(&self, _: &str) -> Result<bool, AuthError> {
-            Ok(true) // always taken
+            Ok(true)
         }
         async fn exists_by_username(&self, _: &str) -> Result<bool, AuthError> {
             Ok(false)

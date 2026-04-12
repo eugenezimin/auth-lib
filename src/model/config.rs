@@ -2,7 +2,7 @@
 ///
 /// This module contains **only** plain data structures and the error type.
 /// All parsing logic lives in [`crate::utils::config`];
-/// all loader traits live in [`crate::interfaces::config`].
+/// all loader traits and loader structs live in [`crate::interfaces::config`].
 use std::time::Duration;
 
 // ── Root config ───────────────────────────────────────────────────────────────
@@ -97,35 +97,4 @@ pub struct RawConfig {
     pub server_host: Option<String>,
     pub server_port: Option<u16>,
     pub server_max_body_bytes: Option<usize>,
-}
-
-// ── Built-in loaders ──────────────────────────────────────────────────────────
-
-/// Loads configuration from environment variables (and an optional `.env` file).
-///
-/// This is the default loader used by [`Config::init`].
-pub struct EnvLoader;
-
-/// Loads configuration from a caller-supplied [`RawConfig`] struct.
-///
-/// Useful in tests, CLI tools, or any context where the caller already holds
-/// the values and does not want to go through environment variables.
-///
-/// # Example
-///
-/// ```rust,ignore
-/// use auth_lib::interfaces::config::{DirectLoader, RawConfig};
-/// use auth_lib::model::config::Config;
-///
-/// Config::init_with(DirectLoader::new(
-///     RawConfig::default()
-///         .db_host("localhost")
-///         .db_user("postgres")
-///         .db_password("secret")
-///         .jwt_secret("super-secret-key"),
-/// ))
-/// .expect("config failed");
-/// ```
-pub struct DirectLoader {
-    pub raw_config: RawConfig,
 }
