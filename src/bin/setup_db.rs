@@ -6,16 +6,17 @@
 //! Expected variables:
 //!   DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME (optional – defaults to "auth")
 //!
-//! Migration SQL is read at runtime from `src/data_models/postgres.sql`
+//! Migration SQL is read at runtime from `src/model/migrations/postgres.sql`
 //! (path relative to the project root, i.e. where you run `cargo` from).
 
 use std::io::{self, Write};
 
-use tokio_postgres::{Client, Config, Error as PgError, NoTls};
+use sqlx::postgres::PgPoolOptions;
+use sqlx::{PgPool, Row};
 
 // ── SQL file path ─────────────────────────────────────────────────────────────
 
-const SQL_FILE: &str = "src/models/migrations/postgres.sql";
+const SQL_FILE: &str = "src/model/migrations/postgres.sql";
 
 const MANAGED_TABLES: &[&str] = &["sessions", "user_roles", "users", "roles"];
 
@@ -37,9 +38,7 @@ async fn main() {
     let db_port: u16 = env_var("DB_PORT")
         .unwrap_or_else(|| "5432".into())
         .parse()
-        .unwrap_or_else(|_| {
-            fatal("DB_PORT is not a valid port number.");
-        });
+        .unwrap_or_else(|_| fatal("DB_PORT is not a valid port number."));
     let db_user = env_or_exit("DB_USER");
     let db_password = env_or_exit("DB_PASSWORD");
     let db_name = env_var("DB_NAME").unwrap_or_else(|| "auth".into());
@@ -49,19 +48,26 @@ async fn main() {
     println!("  Database : {}", db_name);
     println!();
 
-    // 3. Connect to the *default* postgres database to check server availability
-    //    and create our target database if missing.
-    let admin_client = connect(&db_host, db_port, &db_user, &db_password, "postgres").await;
+    // 3. Connect to the default `postgres` database to create our target db
+    let admin_url = format!(
+        "postgres://{}:{}@{}:{}/postgres",
+        db_user, db_password, db_host, db_port
+    );
+    let admin_pool = connect(&admin_url, "postgres").await;
 
     // 4. Ensure the target database exists
-    ensure_database_exists(&admin_client, &db_name).await;
-    drop(admin_client); // release admin connection
+    ensure_database_exists(&admin_pool, &db_name).await;
+    admin_pool.close().await;
 
     // 5. Connect to the target database
-    let client = connect(&db_host, db_port, &db_user, &db_password, &db_name).await;
+    let db_url = format!(
+        "postgres://{}:{}@{}:{}/{}",
+        db_user, db_password, db_host, db_port, db_name
+    );
+    let pool = connect(&db_url, &db_name).await;
 
     // 6. Check for existing tables / data
-    let has_data = check_existing_data(&client).await;
+    let has_data = check_existing_data(&pool).await;
 
     if has_data {
         println!(
@@ -95,7 +101,7 @@ async fn main() {
 
     // 7. Load SQL file and run migration
     let statements = load_sql_statements();
-    run_migration(&client, &statements).await;
+    run_migration(&pool, &statements).await;
 
     println!();
     println!(
@@ -107,7 +113,6 @@ async fn main() {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// Load a `.env` file from the current working directory (best-effort).
 fn load_env() {
     let path = std::path::Path::new(".env");
     if !path.exists() {
@@ -115,7 +120,6 @@ fn load_env() {
         println!();
         return;
     }
-
     let content = std::fs::read_to_string(path).expect("Failed to read .env file");
     for line in content.lines() {
         let line = line.trim();
@@ -125,7 +129,6 @@ fn load_env() {
         if let Some((key, value)) = line.split_once('=') {
             let key = key.trim();
             let value = value.trim().trim_matches('"').trim_matches('\'');
-            // Don't override already-set variables so the real env takes priority.
             if std::env::var(key).is_err() {
                 unsafe { std::env::set_var(key, value) };
             }
@@ -155,76 +158,51 @@ fn fatal(msg: &str) -> ! {
     std::process::exit(1);
 }
 
-/// Connect to Postgres; exits with a user-friendly message on failure.
-async fn connect(host: &str, port: u16, user: &str, password: &str, dbname: &str) -> Client {
-    let mut config = Config::new();
-    config
-        .host(host)
-        .port(port)
-        .user(user)
-        .password(password)
-        .dbname(dbname);
-
-    match config.connect(NoTls).await {
-        Ok((client, connection)) => {
-            // Drive the connection in the background.
-            tokio::spawn(async move {
-                if let Err(e) = connection.await {
-                    eprintln!("  ⚠️  Connection error: {}", e);
-                }
-            });
-            client
-        }
-        Err(e) => {
-            diagnose_connection_error(&e, host, port, user, dbname);
-        }
-    }
+/// Connect to Postgres via a URL; exits with a user-friendly message on failure.
+async fn connect(url: &str, dbname: &str) -> PgPool {
+    PgPoolOptions::new()
+        .max_connections(1)
+        .connect(url)
+        .await
+        .unwrap_or_else(|e| {
+            diagnose_connection_error(&e.to_string(), dbname);
+        })
 }
 
-/// Print a helpful diagnosis for common connection errors, then exit.
-fn diagnose_connection_error(e: &PgError, host: &str, port: u16, user: &str, dbname: &str) -> ! {
+fn diagnose_connection_error(msg: &str, dbname: &str) -> ! {
     eprintln!();
-    let msg = e.to_string();
-
-    if msg.contains("Connection refused") || msg.contains("No such file or directory") {
-        eprintln!("❌  Cannot reach PostgreSQL at {}:{}.", host, port);
+    if msg.contains("Connection refused") || msg.contains("No such file") {
+        eprintln!("❌  Cannot reach PostgreSQL.");
         eprintln!("    → Make sure PostgreSQL is installed and running.");
         eprintln!("    → On macOS:  brew services start postgresql");
         eprintln!("    → On Linux:  sudo systemctl start postgresql");
-    } else if msg.contains("password authentication failed") || msg.contains("role") {
-        eprintln!("❌  Authentication failed for user '{}'.", user);
+    } else if msg.contains("password authentication") || msg.contains("role") {
+        eprintln!("❌  Authentication failed.");
         eprintln!("    → Check DB_USER and DB_PASSWORD in your .env file.");
-    } else if msg.contains("database") && msg.contains("does not exist") {
-        // We'll handle this case normally for the target db; for postgres db it's fatal.
+    } else if msg.contains("does not exist") {
         eprintln!("❌  Could not connect to database '{}'.", dbname);
-        eprintln!("    → The 'postgres' default database appears to be missing.");
-        eprintln!("    → Your PostgreSQL installation may be incomplete.");
     } else {
-        eprintln!("❌  Failed to connect to PostgreSQL: {}", e);
+        eprintln!("❌  Failed to connect to PostgreSQL: {}", msg);
     }
-
     eprintln!();
     std::process::exit(1);
 }
 
-/// Create the target database if it doesn't already exist.
-async fn ensure_database_exists(admin: &Client, db_name: &str) {
-    let exists: bool = admin
-        .query_one(
-            "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)",
-            &[&db_name],
-        )
-        .await
-        .expect("Failed to query pg_database")
-        .get(0);
+async fn ensure_database_exists(admin: &PgPool, db_name: &str) {
+    let exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)")
+            .bind(db_name)
+            .fetch_one(admin)
+            .await
+            .expect("Failed to query pg_database");
 
     if exists {
         println!("  ✓ Database '{}' already exists.", db_name);
     } else {
         // Database name cannot be parameterised in DDL.
         let sql = format!("CREATE DATABASE \"{}\"", db_name);
-        admin
-            .execute(&sql, &[])
+        sqlx::query(&sql)
+            .execute(admin)
             .await
             .unwrap_or_else(|e| fatal(&format!("Failed to create database '{}': {}", db_name, e)));
         println!("  ✓ Created database '{}'.", db_name);
@@ -233,31 +211,28 @@ async fn ensure_database_exists(admin: &Client, db_name: &str) {
 }
 
 /// Returns true if any managed table exists AND contains at least one row.
-async fn check_existing_data(client: &Client) -> bool {
+async fn check_existing_data(pool: &PgPool) -> bool {
     for table in MANAGED_TABLES {
-        // Check whether the table exists in public schema
-        let exists: bool = client
-            .query_one(
-                "SELECT EXISTS (
-                    SELECT 1 FROM information_schema.tables
-                    WHERE table_schema = 'public' AND table_name = $1
-                )",
-                &[table],
-            )
-            .await
-            .expect("Failed to check table existence")
-            .get(0);
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS (
+                SELECT 1 FROM information_schema.tables
+                WHERE table_schema = 'public' AND table_name = $1
+            )",
+        )
+        .bind(table)
+        .fetch_one(pool)
+        .await
+        .expect("Failed to check table existence");
 
         if !exists {
             continue;
         }
 
         let sql = format!("SELECT EXISTS(SELECT 1 FROM \"public\".\"{table}\" LIMIT 1)");
-        let has_rows: bool = client
-            .query_one(&sql, &[])
+        let has_rows: bool = sqlx::query_scalar(&sql)
+            .fetch_one(pool)
             .await
-            .expect("Failed to query table")
-            .get(0);
+            .expect("Failed to query table");
 
         if has_rows {
             println!("  ⚠️  Table '{}' contains data.", table);
@@ -267,11 +242,8 @@ async fn check_existing_data(client: &Client) -> bool {
     false
 }
 
-/// Read `src/data_models/postgres.sql`, strip comments and blank lines,
-/// then split on `;` to produce individual executable statements.
 fn load_sql_statements() -> Vec<String> {
     let path = std::path::Path::new(SQL_FILE);
-
     if !path.exists() {
         fatal(&format!(
             "SQL file not found: {}\n    Make sure you run `cargo run --bin setup_db` from the project root.",
@@ -284,11 +256,9 @@ fn load_sql_statements() -> Vec<String> {
 
     println!("  ✓ Loaded SQL from {}", SQL_FILE);
 
-    // Strip single-line comments (-- …) and collect non-blank lines.
     let cleaned: String = raw
         .lines()
         .map(|line| {
-            // Remove inline comment portion
             if let Some(pos) = line.find("--") {
                 &line[..pos]
             } else {
@@ -298,7 +268,6 @@ fn load_sql_statements() -> Vec<String> {
         .collect::<Vec<_>>()
         .join("\n");
 
-    // Split on semicolons → individual statements
     cleaned
         .split(';')
         .map(|s| s.trim().to_string())
@@ -306,15 +275,13 @@ fn load_sql_statements() -> Vec<String> {
         .collect()
 }
 
-/// Execute every statement parsed from the SQL file sequentially.
-async fn run_migration(client: &Client, statements: &[String]) {
+async fn run_migration(pool: &PgPool, statements: &[String]) {
     println!("  Running migration ({} statements)…", statements.len());
     println!();
 
     for stmt in statements {
-        // Build a single-line label for display
         let flat: String = stmt.split_whitespace().collect::<Vec<&str>>().join(" ");
-        let label = if flat.len() > 720 {
+        let label = if flat.len() > 80 {
             format!("{}…", &flat[..80])
         } else {
             flat.clone()
@@ -322,16 +289,13 @@ async fn run_migration(client: &Client, statements: &[String]) {
 
         print!("  → Executing: {}", label);
 
-        client
-            .execute(stmt.as_str(), &[])
-            .await
-            .unwrap_or_else(|e| {
-                fatal(&format!(
-                    "Migration failed on statement:\n  {}\nError: {}",
-                    label, e
-                ))
-            });
+        sqlx::query(stmt).execute(pool).await.unwrap_or_else(|e| {
+            fatal(&format!(
+                "Migration failed on statement:\n  {}\nError: {}",
+                label, e
+            ))
+        });
 
-        println!("  ✓ Success");
+        println!("  ✓");
     }
 }

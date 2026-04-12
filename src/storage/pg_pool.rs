@@ -1,19 +1,20 @@
+use sqlx::PgPool;
 /// PostgreSQL connection pool.
 ///
-/// Wraps `deadpool-postgres` and exposes a single `build_pool` function.
+/// Wraps `sqlx::PgPool` and exposes a single `build_pool` function.
 /// The pool is constructed from a [`DatabaseConfig`] and should be created
-/// once at startup, then shared across the application via `Arc`.
+/// once at startup, then shared across the application via `Arc` or cloned
+/// freely — `PgPool` is already `Clone + Send + Sync`.
 ///
-/// All storage implementations receive a `Pool` and call `.get().await`
-/// to borrow a connection for the duration of a single query.
-use deadpool_postgres::{Config as PoolConfig, Pool};
-use tokio_postgres::NoTls;
+/// All storage implementations receive a `PgPool` and sqlx handles
+/// connection borrowing internally per query.
+use sqlx::postgres::PgPoolOptions;
 
 use crate::model::config::DatabaseConfig;
 
 #[derive(Debug)]
 pub enum PoolBuildError {
-    /// `deadpool-postgres` rejected the configuration.
+    /// sqlx rejected the configuration or could not connect.
     Config(String),
 }
 
@@ -29,8 +30,8 @@ impl std::error::Error for PoolBuildError {}
 
 /// PostgreSQL-backed user repository.
 ///
-/// Construct with a shared [`Pool`] and pass it (behind an `Arc`) to the
-/// service layer:
+/// Construct with a shared [`PgPool`] and pass it (behind an `Arc`) to the
+/// service layer, or clone the pool freely — sqlx pools are cheap to clone:
 ///
 /// ```rust,ignore
 /// use std::sync::Arc;
@@ -39,46 +40,33 @@ impl std::error::Error for PoolBuildError {}
 /// let repo = Arc::new(PgUserRepo::new(pool.clone()));
 /// ```
 pub struct PgUserRepo {
-    pub pg_pool: Pool,
+    pub pg_pool: PgPool,
 }
 
-/// Build a `deadpool-postgres` connection pool from a [`DatabaseConfig`].
+/// Build a `sqlx` connection pool from a [`DatabaseConfig`].
 ///
-/// Call this **once** at startup and store the resulting `Pool` in an `Arc`
-/// to share it across all storage implementations.
+/// Call this **once** at startup and store the resulting `PgPool`.
+/// `PgPool` is `Clone`, so pass it around by cloning — no `Arc` needed.
 ///
 /// # Errors
 ///
-/// Returns [`PoolBuildError::Config`] if `deadpool-postgres` cannot construct
-/// a valid pool from the supplied configuration (e.g. an invalid host string).
-///
-/// Note: the pool is **lazy** — no actual TCP connection is made until the
-/// first `.get()` call.  Connection errors surface there, not here.
+/// Returns [`PoolBuildError::Config`] if sqlx cannot construct a valid pool
+/// (e.g. invalid connection URL or connection refused).
 ///
 /// # Example
 ///
 /// ```rust,ignore
-/// use std::sync::Arc;
 /// use auth_lib::storage::pg_pool::build_pool;
 /// use auth_lib::model::config::Config;
 ///
 /// Config::init().expect("config failed");
-/// let pool = Arc::new(build_pool(&Config::global().database).expect("pool failed"));
+/// let pool = build_pool(&Config::global().database).await.expect("pool failed");
 /// ```
-pub fn build_pool(cfg: &DatabaseConfig) -> Result<Pool, PoolBuildError> {
-    let mut pool_cfg = PoolConfig::new();
-
-    pool_cfg.host = Some(cfg.host.clone());
-    pool_cfg.port = Some(cfg.port);
-    pool_cfg.user = Some(cfg.user.clone());
-    pool_cfg.password = Some(cfg.password.clone());
-    pool_cfg.dbname = Some(cfg.name.clone());
-    pool_cfg.connect_timeout = Some(cfg.connect_timeout);
-
-    pool_cfg
-        .builder(NoTls)
-        .map_err(|e| PoolBuildError::Config(e.to_string()))?
-        .max_size(cfg.max_pool_size as usize)
-        .build()
+pub async fn build_pool(cfg: &DatabaseConfig) -> Result<PgPool, PoolBuildError> {
+    PgPoolOptions::new()
+        .max_connections(cfg.max_pool_size)
+        .acquire_timeout(cfg.connect_timeout)
+        .connect(&cfg.connection_url())
+        .await
         .map_err(|e| PoolBuildError::Config(e.to_string()))
 }

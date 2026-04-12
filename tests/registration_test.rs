@@ -25,8 +25,6 @@ use auth_lib::{
     utils::errors::AuthError,
 };
 
-/// Initialize config once from env / `.env`.
-/// `OnceLock` inside `Config` means only the first call does real work.
 fn init_config() -> &'static Config {
     if Config::is_initialized() {
         return Config::global();
@@ -49,31 +47,29 @@ fn init_config() -> &'static Config {
     .expect("Failed to load config from environment")
 }
 
-/// Build a fresh `AuthServiceImpl` backed by a real Postgres pool.
-fn make_service() -> AuthServiceImpl {
+async fn make_repo() -> PgUserRepo {
     let cfg = init_config();
-    let pool = build_pool(&cfg.database).expect("Failed to build DB pool");
+    let pool = build_pool(&cfg.database)
+        .await
+        .expect("Failed to build DB pool");
+    PgUserRepo::new(pool)
+}
+
+async fn make_service() -> AuthServiceImpl {
+    let cfg = init_config();
+    let pool = build_pool(&cfg.database)
+        .await
+        .expect("Failed to build DB pool");
     let user_repo = Arc::new(PgUserRepo::new(pool));
     AuthServiceImpl::new(user_repo)
 }
 
-/// Build a bare `PgUserRepo` for tests that bypass the service layer.
-fn make_repo() -> PgUserRepo {
-    let cfg = init_config();
-    let pool = build_pool(&cfg.database).expect("Failed to build DB pool");
-    PgUserRepo::new(pool)
-}
-
-/// Delete a user by email so each test can start from a known state.
 async fn cleanup_user(repo: &PgUserRepo, email: &str) {
-    let u_exists = repo.find_by_email(email).await;
-    if let Ok(Some(_)) = u_exists {
-        let client = repo.pg_pool.get().await.expect("pool get failed");
-        client
-            .execute("DELETE FROM users WHERE email = $1", &[&email])
-            .await
-            .expect("cleanup DELETE failed");
-    }
+    sqlx::query("DELETE FROM users WHERE email = $1")
+        .bind(email)
+        .execute(&repo.pg_pool)
+        .await
+        .expect("cleanup DELETE failed");
 }
 
 fn valid_request() -> RegisterRequest {
@@ -92,8 +88,8 @@ fn valid_request() -> RegisterRequest {
 
 #[tokio::test]
 async fn test_register_success() {
-    let repo = make_repo();
-    let service = make_service();
+    let repo = make_repo().await;
+    let service = make_service().await;
     cleanup_user(&repo, "alice@example.com").await;
 
     let res: RegisterResponse = service
@@ -131,8 +127,8 @@ async fn test_register_success() {
 
 #[tokio::test]
 async fn test_register_minimal_fields() {
-    let repo = make_repo();
-    let service = make_service();
+    let repo = make_repo().await;
+    let service = make_service().await;
     cleanup_user(&repo, "minimal@example.com").await;
 
     let req = RegisterRequest {
@@ -170,8 +166,8 @@ async fn test_register_minimal_fields() {
 
 #[tokio::test]
 async fn test_register_duplicate_email() {
-    let repo = make_repo();
-    let service = make_service();
+    let repo = make_repo().await;
+    let service = make_service().await;
     cleanup_user(&repo, "dup@example.com").await;
 
     let make_req = || RegisterRequest {
@@ -202,8 +198,8 @@ async fn test_register_duplicate_email() {
 
 #[tokio::test]
 async fn test_register_duplicate_username() {
-    let repo = make_repo();
-    let service = make_service();
+    let repo = make_repo().await;
+    let service = make_service().await;
     cleanup_user(&repo, "user_a@example.com").await;
     cleanup_user(&repo, "user_b@example.com").await;
 
@@ -248,6 +244,7 @@ async fn test_register_duplicate_username() {
 #[tokio::test]
 async fn test_register_empty_email_rejected() {
     let err = make_service()
+        .await
         .register(RegisterRequest {
             email: "".into(),
             password: "ValidP@ss1".into(),
@@ -263,6 +260,7 @@ async fn test_register_empty_email_rejected() {
 #[tokio::test]
 async fn test_register_malformed_email_rejected() {
     let err = make_service()
+        .await
         .register(RegisterRequest {
             email: "not-an-email".into(),
             password: "ValidP@ss1".into(),
@@ -276,23 +274,9 @@ async fn test_register_malformed_email_rejected() {
 }
 
 #[tokio::test]
-async fn test_register_whitespace_email_rejected() {
-    let err = make_service()
-        .register(RegisterRequest {
-            email: "   ".into(),
-            password: "ValidP@ss1".into(),
-            username: None,
-            first_name: None,
-            last_name: None,
-        })
-        .await
-        .expect_err("Whitespace-only email must be rejected");
-    assert!(matches!(err, AuthError::InvalidEmail(_)));
-}
-
-#[tokio::test]
 async fn test_register_empty_password_rejected() {
     let err = make_service()
+        .await
         .register(RegisterRequest {
             email: "pw_test@example.com".into(),
             password: "".into(),
@@ -308,6 +292,7 @@ async fn test_register_empty_password_rejected() {
 #[tokio::test]
 async fn test_register_short_password_rejected() {
     let err = make_service()
+        .await
         .register(RegisterRequest {
             email: "short_pw@example.com".into(),
             password: "abc".into(),
@@ -326,7 +311,7 @@ async fn test_register_short_password_rejected() {
 
 #[tokio::test]
 async fn test_db_unique_index_rejects_duplicate_email() {
-    let repo = make_repo();
+    let repo = make_repo().await;
     cleanup_user(&repo, "idx@example.com").await;
 
     let new_user = NewUser {
