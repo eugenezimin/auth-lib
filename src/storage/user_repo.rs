@@ -1,5 +1,3 @@
-use std::u128;
-
 /// PostgreSQL implementation of [`UserRepo`].
 ///
 /// All SQL lives here — the service layer never sees a query string.
@@ -19,8 +17,6 @@ impl PgUserRepo {
         Self { pg_pool }
     }
 }
-
-// ── UserRepo impl ─────────────────────────────────────────────────────────────
 
 #[async_trait]
 impl UserRepo for PgUserRepo {
@@ -73,8 +69,7 @@ impl UserRepo for PgUserRepo {
     async fn create(&self, new_user: NewUser) -> Result<User, AuthError> {
         let client = get_client(&self.pg_pool).await?;
 
-        // INSERT … RETURNING gives us the full row (including DB-generated
-        // id, is_active, is_verified, created_at, updated_at) in one round-trip.
+        // Pass Option<String> directly — tokio-postgres maps None to NULL.
         let row = client
             .query_one(
                 "INSERT INTO users
@@ -90,30 +85,17 @@ impl UserRepo for PgUserRepo {
                     &new_user.email,
                     &new_user.password_hash,
                     &new_user.jwt_secret,
-                    &new_user.username.unwrap_or_default(),
-                    &new_user.first_name.unwrap_or_default(),
-                    &new_user.last_name.unwrap_or_default(),
+                    &new_user.username,
+                    &new_user.first_name,
+                    &new_user.last_name,
                 ],
             )
             .await
-            .map_err(|e| {
-                // Distinguish unique-constraint violations so the service can
-                // surface a user-facing error rather than a generic DB error.
-                let msg = e.to_string();
-                if msg.contains("users_email") {
-                    AuthError::EmailAlreadyTaken
-                } else if msg.contains("users_username_key") {
-                    AuthError::UsernameAlreadyTaken
-                } else {
-                    AuthError::DatabaseError(msg)
-                }
-            })?;
+            .map_err(pg_insert_error)?;
 
         Ok(row_to_user(row))
     }
 }
-
-// ── Private helpers ───────────────────────────────────────────────────────────
 
 /// Borrow a connection from the pool, converting pool errors to [`AuthError`].
 async fn get_client(pool: &Pool) -> Result<deadpool_postgres::Client, AuthError> {
@@ -122,39 +104,53 @@ async fn get_client(pool: &Pool) -> Result<deadpool_postgres::Client, AuthError>
         .map_err(|e| AuthError::DatabaseError(format!("connection pool error: {e}")))
 }
 
-/// Map a `tokio-postgres` [`Row`] to a [`User`].
+/// Convert a `tokio-postgres` INSERT error into the appropriate [`AuthError`].
 ///
-/// Column order must match every `SELECT` / `RETURNING` clause in this file.
-fn row_to_user(row: Row) -> User {
-    if row.is_empty() {
-        AuthError::DatabaseError("attempted to map empty row to User".to_string());
+/// `tokio-postgres` wraps the underlying `DbError` as the error's *source*,
+/// so `e.to_string()` only ever yields the generic `"db error"` string.
+/// We must walk the `std::error::Error::source()` chain to reach the
+/// `tokio_postgres::error::DbError` which carries the constraint name and
+/// `SqlState` code (23505 = unique_violation).
+fn pg_insert_error(e: tokio_postgres::Error) -> AuthError {
+    use std::error::Error as StdError;
+
+    // Collect every message in the source chain into one string to search.
+    let mut full = e.to_string();
+    let mut source = e.source();
+    while let Some(s) = source {
+        full.push(' ');
+        full.push_str(&s.to_string());
+        source = s.source();
     }
+    let lower = full.to_lowercase();
 
-    let id: uuid::Uuid = row.get("id");
-    let email = row.get::<_, String>("email");
-    let password_hash = row.get::<_, Option<String>>("password_hash");
-    let jwt_secret = row.get::<_, Option<String>>("jwt_secret");
-    let username = row.get::<_, Option<String>>("username");
-    let first_name = row.get::<_, Option<String>>("first_name");
-    let last_name = row.get::<_, Option<String>>("last_name");
-    let avatar_url = row.get::<_, Option<String>>("avatar_url");
-    let is_active = row.get::<_, bool>("is_active");
-    let is_verified = row.get::<_, bool>("is_verified");
-    let created_at = row.get("created_at");
-    let updated_at = row.get::<_, chrono::DateTime<chrono::Utc>>("updated_at");
+    if lower.contains("users_email") || (lower.contains("unique") && lower.contains("email")) {
+        AuthError::EmailAlreadyTaken
+    } else if lower.contains("users_username_key")
+        || (lower.contains("unique") && lower.contains("username"))
+    {
+        AuthError::UsernameAlreadyTaken
+    } else {
+        // Preserve the full chained message so callers (including tests) can
+        // inspect it rather than receiving the opaque "db error" string.
+        AuthError::DatabaseError(full)
+    }
+}
 
+/// Map a `tokio-postgres` [`Row`] to a [`User`].
+fn row_to_user(row: Row) -> User {
     User {
-        id,
-        email,
-        password_hash,
-        jwt_secret,
-        username,
-        first_name,
-        last_name,
-        avatar_url,
-        is_active,
-        is_verified,
-        created_at,
-        updated_at,
+        id: row.get::<_, uuid::Uuid>("id"),
+        email: row.get::<_, String>("email"),
+        password_hash: row.get::<_, Option<String>>("password_hash"),
+        jwt_secret: row.get::<_, Option<String>>("jwt_secret"),
+        username: row.get::<_, Option<String>>("username"),
+        first_name: row.get::<_, Option<String>>("first_name"),
+        last_name: row.get::<_, Option<String>>("last_name"),
+        avatar_url: row.get::<_, Option<String>>("avatar_url"),
+        is_active: row.get::<_, bool>("is_active"),
+        is_verified: row.get::<_, bool>("is_verified"),
+        created_at: row.get::<_, chrono::DateTime<chrono::Utc>>("created_at"),
+        updated_at: row.get::<_, chrono::DateTime<chrono::Utc>>("updated_at"),
     }
 }
