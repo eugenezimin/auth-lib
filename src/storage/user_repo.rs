@@ -130,7 +130,7 @@ fn row_to_user(row: Row) -> User {
         AuthError::DatabaseError("attempted to map empty row to User".to_string());
     }
 
-    let id = row.get("id");
+    let id: uuid::Uuid = row.get("id");
     let email = row.get::<_, String>("email");
     let password_hash = row.get::<_, Option<String>>("password_hash");
     let jwt_secret = row.get::<_, Option<String>>("jwt_secret");
@@ -144,7 +144,7 @@ fn row_to_user(row: Row) -> User {
     let updated_at = row.get::<_, &str>("updated_at");
 
     User {
-        id: uuid::Uuid::from_u128(id as u128),
+        id,
         email,
         password_hash,
         jwt_secret,
