@@ -42,6 +42,10 @@ impl std::error::Error for PoolBuildError {}
 pub struct PgUserRepo {
     pub pg_pool: PgPool,
 }
+/// PostgreSQL-backed role repository.
+pub struct PgRoleRepo {
+    pub pg_pool: sqlx::PgPool,
+}
 
 /// Build a `sqlx` connection pool from a [`DatabaseConfig`].
 ///

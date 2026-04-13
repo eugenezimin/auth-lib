@@ -1,17 +1,19 @@
-//! Integration tests — user registration
-//!
-//! These tests talk to a real PostgreSQL database.
-//! Set the same env-vars (or `.env`) that the application uses:
-//!
-//!   DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
-//!   JWT_SECRET
-//!
-//! Run with:
-//!   cargo test --test registration_test -- --test-threads=1
-//!
-//! `--test-threads=1` keeps tests sequential so each one starts from a clean
-//! slate without races on shared database state.
-
+/// Integration tests — user registration
+///
+/// These tests talk to a real PostgreSQL database.
+/// Set the same env-vars (or `.env`) that the application uses:
+///
+///   DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
+///   JWT_SECRET
+///
+/// Run with:
+///   cargo test --test registration_test -- --test-threads=1
+///
+/// `--test-threads=1` keeps tests sequential so each one starts from a clean
+/// slate without races on shared database state.
+///
+/// Each test does cleanup → create → assert → cleanup to ensure it can be re-run without manual DB resets.
+///
 use std::sync::Arc;
 
 use auth_lib::{
