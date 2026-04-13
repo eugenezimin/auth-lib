@@ -26,7 +26,7 @@ use crate::utils::errors::AuthError;
 /// Hash a plaintext password with Argon2id.
 ///
 /// Generates a fresh random salt on every call, so two calls with the same
-/// password produce different hashes — this is the expected behaviour.
+/// password produce different hashes — this is the expected behavior.
 ///
 /// # Errors
 ///

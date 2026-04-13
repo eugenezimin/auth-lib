@@ -19,7 +19,7 @@ use auth_lib::{
     interfaces::{auth::AuthService, config::DirectLoader, db::user_repo::UserRepo},
     model::{
         config::{Config, DatabaseBackend, RawConfig},
-        user::{NewUser, RegisterRequest, RegisterResponse, User},
+        user::{NewUser, RegisterRequest, RegisterResponse},
     },
     storage::{
         db_factory::build_user_repo,
