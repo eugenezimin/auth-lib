@@ -44,13 +44,13 @@ CREATE TABLE `users` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- ── user_roles ────────────────────────────────────────────────────────────────
--- removed_at is NULL while the assignment is active; set to the revocation
+-- revoked_at is NULL while the assignment is active; set to the revocation
 -- timestamp when the role is withdrawn.  This keeps the full audit trail
 -- without a separate history table.
 --
 -- Note: MySQL does not support partial (filtered) indexes, so the active-only
 -- uniqueness guarantee that PostgreSQL enforces via
---   CREATE UNIQUE INDEX … WHERE removed_at IS NULL
+--   CREATE UNIQUE INDEX … WHERE revoked_at IS NULL
 -- cannot be expressed directly in DDL here.  The application layer (or a
 -- BEFORE INSERT trigger below) must enforce that a user cannot hold the same
 -- role twice concurrently.
@@ -59,12 +59,12 @@ CREATE TABLE `user_roles` (
     `user_id`     CHAR(36)    NOT NULL,
     `role_id`     CHAR(36)    NOT NULL,
     `assigned_at` DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6),
-    `removed_at`  DATETIME(6)          DEFAULT NULL,
+    `revoked_at`  DATETIME(6)          DEFAULT NULL,
     PRIMARY KEY (`id`),
     KEY `idx_user_roles_user_id` (`user_id`),
     KEY `idx_user_roles_role_id` (`role_id`),
     KEY `idx_user_roles_assigned_at` (`user_id`, `assigned_at` DESC),
-    KEY `idx_user_roles_removed_at`  (`user_id`, `removed_at`  DESC),
+    KEY `idx_user_roles_revoked_at`  (`user_id`, `revoked_at`  DESC),
     CONSTRAINT `fk_user_roles_user_id`
         FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE,
     CONSTRAINT `fk_user_roles_role_id`
@@ -73,7 +73,7 @@ CREATE TABLE `user_roles` (
 
 -- Active-assignment uniqueness guard.
 -- Fires before every INSERT on user_roles.  If the user already holds the
--- role with removed_at IS NULL the signal aborts the statement with a clear
+-- role with revoked_at IS NULL the signal aborts the statement with a clear
 -- SQLSTATE '45000' error that the application can catch and map to
 -- AuthError::RoleAlreadyAssigned (or similar).
 DELIMITER $$
@@ -88,7 +88,7 @@ BEGIN
     FROM `user_roles`
     WHERE `user_id`    = NEW.user_id
       AND `role_id`    = NEW.role_id
-      AND `removed_at` IS NULL;
+      AND `revoked_at` IS NULL;
 
     IF v_count > 0 THEN
         SIGNAL SQLSTATE '45000'

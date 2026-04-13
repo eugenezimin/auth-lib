@@ -41,7 +41,7 @@ CREATE UNIQUE INDEX users_email        ON public.users USING btree (email);
 CREATE UNIQUE INDEX users_username_key ON public.users USING btree (username);
 
 -- ── users_roles ────────────────────────────────────────────────────────────────
--- removed_at is NULL while the assignment is active; set to the revocation
+-- revoked_at is NULL while the assignment is active; set to the revocation
 -- timestamp when the role is withdrawn.  This keeps the full audit trail
 -- without a separate history table.
 CREATE TABLE "users_roles" (
@@ -49,7 +49,7 @@ CREATE TABLE "users_roles" (
     "user_id"     uuid        NOT NULL,
     "role_id"     uuid        NOT NULL,
     "assigned_at" timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "removed_at"  timestamptz,                         -- NULL  → active
+    "revoked_at"  timestamptz,                         -- NULL  → active
     PRIMARY KEY ("id"),
     CONSTRAINT fk_users_roles_user_id
         FOREIGN KEY ("user_id") REFERENCES "users"("id") ON DELETE CASCADE,
@@ -59,10 +59,10 @@ CREATE TABLE "users_roles" (
 
 -- Uniqueness is scoped to *active* assignments only: the same (user, role)
 -- pair may appear multiple times historically, but only once with
--- removed_at IS NULL.
+-- revoked_at IS NULL.
 CREATE UNIQUE INDEX unique_user_role_active
     ON public.users_roles (user_id, role_id)
-    WHERE removed_at IS NULL;
+    WHERE revoked_at IS NULL;
 
 CREATE INDEX idx_users_roles_user_id
     ON public.users_roles USING btree (user_id);
@@ -73,12 +73,12 @@ CREATE INDEX idx_users_roles_role_id
 -- Partial index: fast lookup of every active assignment for a user.
 CREATE INDEX idx_users_roles_active
     ON public.users_roles (user_id, assigned_at DESC)
-    WHERE removed_at IS NULL;
+    WHERE revoked_at IS NULL;
 
 -- Partial index: fast lookup of revoked assignments (audit / reporting).
 CREATE INDEX idx_users_roles_removed
-    ON public.users_roles (user_id, removed_at DESC)
-    WHERE removed_at IS NOT NULL;
+    ON public.users_roles (user_id, revoked_at DESC)
+    WHERE revoked_at IS NOT NULL;
 
 -- ── sessions ──────────────────────────────────────────────────────────────────
 CREATE TABLE "sessions" (

@@ -162,8 +162,8 @@ create(
 );
 
 // ── user_roles ────────────────────────────────────────────────────────────────
-// removed_at is absent (or null) while the assignment is active.
-// A partial unique index on { user_id, role_id } WHERE removed_at does not
+// revoked_at is absent (or null) while the assignment is active.
+// A partial unique index on { user_id, role_id } WHERE revoked_at does not
 // exist replicates the PostgreSQL partial-index semantics exactly.
 
 create(
@@ -187,10 +187,10 @@ create(
             assigned_at: {
                 bsonType: "date",
             },
-            // Omitting removed_at from `required` makes it optional, which
+            // Omitting revoked_at from `required` makes it optional, which
             // correctly models NULL in SQL.  The validator allows it to be a
             // date or explicitly null.
-            removed_at: {
+            revoked_at: {
                 bsonType: ["date", "null"],
                 description: "null / absent = active; set = revoked",
             },
@@ -198,12 +198,12 @@ create(
     },
     [
         // Active-assignment uniqueness: only one active (user, role) pair.
-        // partialFilterExpression is MongoDB's equivalent of WHERE removed_at IS NULL.
+        // partialFilterExpression is MongoDB's equivalent of WHERE revoked_at IS NULL.
         {
             key:    { user_id: 1, role_id: 1 },
             name:   "unique_user_role_active",
             unique: true,
-            partialFilterExpression: { removed_at: { $exists: false } },
+            partialFilterExpression: { revoked_at: { $exists: false } },
         },
         // Fast lookup of all assignments (active + revoked) for a user.
         {
@@ -214,13 +214,13 @@ create(
         {
             key:  { user_id: 1, assigned_at: -1 },
             name: "idx_user_roles_active",
-            partialFilterExpression: { removed_at: { $exists: false } },
+            partialFilterExpression: { revoked_at: { $exists: false } },
         },
         // Fast lookup of revoked assignments (audit / reporting).
         {
-            key:  { user_id: 1, removed_at: -1 },
+            key:  { user_id: 1, revoked_at: -1 },
             name: "idx_user_roles_removed",
-            partialFilterExpression: { removed_at: { $exists: true } },
+            partialFilterExpression: { revoked_at: { $exists: true } },
         },
         {
             key:  { role_id: 1 },
