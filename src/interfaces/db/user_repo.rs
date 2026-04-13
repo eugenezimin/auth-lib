@@ -23,6 +23,9 @@
 ///     async fn find_by_email(&self, email: &str) -> Result<Option<User>, AuthError> {
 ///         Ok(None) // always "not found"
 ///     }
+///     async fn find_by_username(&self, username: &str) -> Result<Option<User>, AuthError> {
+///         Ok(None) // always "not found"
+///     }
 ///     async fn exists_by_email(&self, email: &str) -> Result<bool, AuthError> {
 ///         Ok(false)
 ///     }
@@ -31,6 +34,21 @@
 ///     }
 ///     async fn create(&self, new_user: NewUser) -> Result<User, AuthError> {
 ///         todo!()
+///     }
+///     async fn delete(&self, user_id: uuid::Uuid) -> Result<bool, AuthError> {
+///         Ok(true)
+///     }
+///     async fn activate(&self, user_id: uuid::Uuid) -> Result<bool, AuthError> {
+///         Ok(true)
+///     }
+///     async fn deactivate(&self, user_id: uuid::Uuid) -> Result<bool, AuthError> {
+///         Ok(true)
+///     }
+///     async fn is_active(&self, user_id: uuid::Uuid) -> Result<Option<bool>, AuthError> {
+///         Ok(Some(true))
+///     }
+///     async fn is_verified(&self, user_id: uuid::Uuid) -> Result<Option<bool>, AuthError> {
+///         Ok(Some(false))
 ///     }
 /// }
 /// ```
@@ -52,6 +70,12 @@ pub trait UserRepo: Send + Sync {
     /// this as "user does not exist" rather than an error.
     async fn find_by_email(&self, email: &str) -> Result<Option<User>, AuthError>;
 
+    /// Fetch a user by their username.
+    ///
+    /// Returns `Ok(None)` when no matching row is found — callers should treat
+    /// this as "user does not exist" rather than an error.
+    async fn find_by_username(&self, username: &str) -> Result<Option<User>, AuthError>;
+
     /// Returns `true` if a row with the given email already exists.
     ///
     /// Prefer this over `find_by_email` in registration flows where the full
@@ -71,4 +95,41 @@ pub trait UserRepo: Send + Sync {
     /// correct columns, including the already-hashed `password_hash` and
     /// a freshly generated `jwt_secret`.
     async fn create(&self, new_user: NewUser) -> Result<User, AuthError>;
+
+    /// Permanently delete a user row by their UUID.
+    ///
+    /// This is a hard delete — the row is gone, and any foreign-keyed rows
+    /// (sessions, user_roles) will be removed via `ON DELETE CASCADE`.
+    /// Prefer [`deactivate`](Self::deactivate) when soft-deletion is sufficient.
+    ///
+    /// Returns `Ok(true)` if a row was deleted, `Ok(false)` if no matching
+    /// row was found (idempotent — callers need not treat this as an error).
+    async fn delete(&self, user_id: uuid::Uuid) -> Result<bool, AuthError>;
+
+    /// Set `is_active = true` for the given user.
+    ///
+    /// Re-enables an account that was previously deactivated.
+    /// Returns `Ok(true)` if the row was found and updated, `Ok(false)` if
+    /// no user with that UUID exists.
+    async fn activate(&self, user_id: uuid::Uuid) -> Result<bool, AuthError>;
+
+    /// Set `is_active = false` for the given user (soft delete).
+    ///
+    /// The user row is retained in the database but the account is treated as
+    /// inactive by the auth layer.  Sessions are not invalidated automatically;
+    /// callers should purge sessions separately if immediate lock-out is needed.
+    ///
+    /// Returns `Ok(true)` if the row was found and updated, `Ok(false)` if
+    /// no user with that UUID exists.
+    async fn deactivate(&self, user_id: uuid::Uuid) -> Result<bool, AuthError>;
+
+    /// Return the current `is_active` flag for the given user.
+    ///
+    /// Returns `Ok(None)` if no user with that UUID exists.
+    async fn is_active(&self, user_id: uuid::Uuid) -> Result<Option<bool>, AuthError>;
+
+    /// Return the current `is_verified` flag for the given user.
+    ///
+    /// Returns `Ok(None)` if no user with that UUID exists.
+    async fn is_verified(&self, user_id: uuid::Uuid) -> Result<Option<bool>, AuthError>;
 }
