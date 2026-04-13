@@ -41,7 +41,9 @@ use std::time::Duration;
 
 use crate::{
     interfaces::config::{ConfigLoader, DirectLoader, EnvLoader},
-    model::config::{Config, ConfigError, DatabaseConfig, JwtConfig, RawConfig, ServerConfig},
+    model::config::{
+        Config, ConfigError, DatabaseBackend, DatabaseConfig, JwtConfig, RawConfig, ServerConfig,
+    },
 };
 
 // ── Global singleton ──────────────────────────────────────────────────────────
@@ -205,8 +207,10 @@ pub(crate) fn load_dotenv() {
 }
 
 impl RawConfig {
-    // ── Chainable builder helpers ─────────────────────────────────────────────
-
+    pub fn db_backend(mut self, v: DatabaseBackend) -> Self {
+        self.db_backend = Some(v);
+        self
+    }
     pub fn db_host(mut self, v: impl Into<String>) -> Self {
         self.db_host = Some(v.into());
         self
@@ -272,6 +276,9 @@ impl RawConfig {
         self,
     ) -> Result<(DatabaseConfig, JwtConfig, ServerConfig), ConfigError> {
         let database = DatabaseConfig {
+            backend: self
+                .db_backend
+                .ok_or_else(|| ConfigError::Missing("db_backend".into()))?,
             host: self
                 .db_host
                 .ok_or_else(|| ConfigError::Missing("db_host".into()))?,
@@ -313,6 +320,14 @@ impl ConfigLoader for EnvLoader {
         crate::utils::config::load_dotenv();
 
         Ok(RawConfig {
+            db_backend: env_str("DB_BACKEND").and_then(|s| {
+                match s.trim().to_lowercase().as_str() {
+                    "postgres" => Some(DatabaseBackend::Postgres),
+                    "mysql" => Some(DatabaseBackend::MySQL),
+                    "mongo" => Some(DatabaseBackend::Mongo),
+                    _ => None,
+                }
+            }),
             db_host: env_str("DB_HOST"),
             db_port: parse_opt("DB_PORT")?,
             db_user: env_str("DB_USER"),

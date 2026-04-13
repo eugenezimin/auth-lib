@@ -18,10 +18,13 @@ use auth_lib::{
     auth::register::AuthServiceImpl,
     interfaces::{auth::AuthService, config::DirectLoader, db::user_repo::UserRepo},
     model::{
-        config::{Config, RawConfig},
-        user::{NewUser, RegisterRequest, RegisterResponse},
+        config::{Config, DatabaseBackend, RawConfig},
+        user::{NewUser, RegisterRequest, RegisterResponse, User},
     },
-    storage::postgres::pg_pool::{PgUserRepo, build_pool},
+    storage::{
+        db_factory::build_user_repo,
+        postgres::pg_pool::{PgUserRepo, build_pool},
+    },
     utils::errors::AuthError,
 };
 
@@ -32,6 +35,7 @@ fn init_config() -> &'static Config {
 
     Config::init_with(DirectLoader::new(
         RawConfig::default()
+            .db_backend(DatabaseBackend::Postgres)
             .db_host("localhost")
             .db_port(5432)
             .db_user("postgres")
@@ -47,12 +51,11 @@ fn init_config() -> &'static Config {
     .expect("Failed to load config from environment")
 }
 
-async fn make_repo() -> PgUserRepo {
+async fn make_repo() -> Arc<dyn UserRepo> {
     let cfg = init_config();
-    let pool = build_pool(&cfg.database)
+    build_user_repo(&cfg.database)
         .await
-        .expect("Failed to build DB pool");
-    PgUserRepo::new(pool)
+        .expect("Failed to build user repo")
 }
 
 async fn make_service() -> AuthServiceImpl {
@@ -64,12 +67,15 @@ async fn make_service() -> AuthServiceImpl {
     AuthServiceImpl::new(user_repo)
 }
 
-async fn cleanup_user(repo: &PgUserRepo, email: &str) {
-    sqlx::query("DELETE FROM users WHERE email = $1")
-        .bind(email)
-        .execute(&repo.pg_pool)
-        .await
-        .expect("cleanup DELETE failed");
+async fn cleanup_user(
+    repo: &Arc<dyn UserRepo>,
+    email: &str,
+) -> Result<Option<uuid::Uuid>, AuthError> {
+    if let Some(user) = repo.find_by_email(email).await? {
+        repo.delete(user.id).await?;
+        return Ok(Some(user.id));
+    }
+    Ok(None)
 }
 
 fn valid_request() -> RegisterRequest {
@@ -90,7 +96,9 @@ fn valid_request() -> RegisterRequest {
 async fn test_register_success() {
     let repo = make_repo().await;
     let service = make_service().await;
-    cleanup_user(&repo, "alice@example.com").await;
+    cleanup_user(&repo, "alice@example.com")
+        .await
+        .expect("cleanup of alice@example.com failed");
 
     let res: RegisterResponse = service
         .register(valid_request())
@@ -122,14 +130,18 @@ async fn test_register_success() {
         "hash should use argon2 or bcrypt, got: {hash}"
     );
 
-    cleanup_user(&repo, "alice@example.com").await;
+    cleanup_user(&repo, "alice@example.com")
+        .await
+        .expect("cleanup of alice@example.com failed");
 }
 
 #[tokio::test]
 async fn test_register_minimal_fields() {
     let repo = make_repo().await;
     let service = make_service().await;
-    cleanup_user(&repo, "minimal@example.com").await;
+    cleanup_user(&repo, "minimal@example.com")
+        .await
+        .expect("cleanup of minimal@example.com failed");
 
     let req = RegisterRequest {
         email: "minimal@example.com".into(),
@@ -157,7 +169,9 @@ async fn test_register_minimal_fields() {
     assert!(user.first_name.is_none());
     assert!(user.last_name.is_none());
 
-    cleanup_user(&repo, "minimal@example.com").await;
+    cleanup_user(&repo, "minimal@example.com")
+        .await
+        .expect("cleanup of minimal@example.com failed");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -168,7 +182,9 @@ async fn test_register_minimal_fields() {
 async fn test_register_duplicate_email() {
     let repo = make_repo().await;
     let service = make_service().await;
-    cleanup_user(&repo, "dup@example.com").await;
+    cleanup_user(&repo, "dup@example.com")
+        .await
+        .expect("cleanup of dup@example.com failed");
 
     let make_req = || RegisterRequest {
         email: "dup@example.com".into(),
@@ -193,15 +209,21 @@ async fn test_register_duplicate_email() {
         "Expected AuthError::EmailAlreadyTaken, got: {err:?}"
     );
 
-    cleanup_user(&repo, "dup@example.com").await;
+    cleanup_user(&repo, "dup@example.com")
+        .await
+        .expect("cleanup of dup@example.com failed");
 }
 
 #[tokio::test]
 async fn test_register_duplicate_username() {
     let repo = make_repo().await;
     let service = make_service().await;
-    cleanup_user(&repo, "user_a@example.com").await;
-    cleanup_user(&repo, "user_b@example.com").await;
+    cleanup_user(&repo, "user_a@example.com")
+        .await
+        .expect("cleanup of user_a@example.com failed");
+    cleanup_user(&repo, "user_b@example.com")
+        .await
+        .expect("cleanup of user_b@example.com failed");
 
     let first = RegisterRequest {
         email: "user_a@example.com".into(),
@@ -233,8 +255,12 @@ async fn test_register_duplicate_username() {
         "Expected AuthError::UsernameAlreadyTaken, got: {err:?}"
     );
 
-    cleanup_user(&repo, "user_a@example.com").await;
-    cleanup_user(&repo, "user_b@example.com").await;
+    cleanup_user(&repo, "user_a@example.com")
+        .await
+        .expect("cleanup of user_a@example.com failed");
+    cleanup_user(&repo, "user_b@example.com")
+        .await
+        .expect("cleanup of user_b@example.com failed");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -312,7 +338,9 @@ async fn test_register_short_password_rejected() {
 #[tokio::test]
 async fn test_db_unique_index_rejects_duplicate_email() {
     let repo = make_repo().await;
-    cleanup_user(&repo, "idx@example.com").await;
+    cleanup_user(&repo, "idx@example.com")
+        .await
+        .expect("cleanup of idx@example.com failed");
 
     let new_user = NewUser {
         email: "idx@example.com".into(),
@@ -340,5 +368,7 @@ async fn test_db_unique_index_rejects_duplicate_email() {
         "Expected a DB uniqueness violation, got: {err:?}"
     );
 
-    cleanup_user(&repo, "idx@example.com").await;
+    cleanup_user(&repo, "idx@example.com")
+        .await
+        .expect("cleanup of idx@example.com failed");
 }

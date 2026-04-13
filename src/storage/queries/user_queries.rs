@@ -21,10 +21,39 @@ pub const FIND_USER_BY_EMAIL: &str = r#"
     WHERE email = $1
 "#;
 
+pub const FIND_USER_BY_USERNAME: &str = r#"
+    SELECT
+        id, email, password_hash, jwt_secret, username,
+        first_name, last_name, avatar_url,
+        is_active, is_verified, created_at, updated_at
+    FROM users
+    WHERE username = $1
+"#;
+
 pub const EXISTS_BY_EMAIL: &str = r#"
     SELECT EXISTS(SELECT 1 FROM users WHERE email = $1)
 "#;
 
 pub const EXISTS_BY_USERNAME: &str = r#"
     SELECT EXISTS(SELECT 1 FROM users WHERE username = $1)
+"#;
+
+pub const DELETE_USER: &str = r#"
+    DELETE FROM users WHERE id = $1
+"#;
+
+pub const ACTIVATE_USER: &str = r#"
+    UPDATE users SET is_active = true, updated_at = CURRENT_TIMESTAMP WHERE id = $1
+"#;
+
+pub const DEACTIVATE_USER: &str = r#"
+    UPDATE users SET is_active = false, updated_at = CURRENT_TIMESTAMP WHERE id = $1
+"#;
+
+pub const GET_IS_ACTIVE: &str = r#"
+    SELECT is_active FROM users WHERE id = $1
+"#;
+
+pub const GET_IS_VERIFIED: &str = r#"
+    SELECT is_verified FROM users WHERE id = $1
 "#;

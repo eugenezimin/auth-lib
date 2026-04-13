@@ -1,11 +1,12 @@
 use auth_lib::{
     interfaces::config::DirectLoader,
-    model::config::{Config, RawConfig},
+    model::config::{Config, DatabaseBackend, RawConfig},
 };
 
 #[test]
 fn config_direct_load() {
     let configuration = RawConfig::default()
+        .db_backend(DatabaseBackend::Postgres)
         .db_host("localhost")
         .db_port(5432)
         .db_user("postgres")
@@ -27,6 +28,7 @@ fn config_direct_load() {
     assert!(Config::is_initialized());
 
     println!("=== DatabaseConfig ===");
+    println!("  backend           : {:?}", cfg.database.backend);
     println!("  host              : {}", cfg.database.host);
     println!("  port              : {}", cfg.database.port);
     println!("  user              : {}", cfg.database.user);

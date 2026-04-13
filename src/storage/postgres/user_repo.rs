@@ -30,6 +30,16 @@ impl UserRepo for PgUserRepo {
         Ok(user)
     }
 
+    async fn find_by_username(&self, username: &str) -> Result<Option<User>, AuthError> {
+        let user: Option<User> = sqlx::query_as(user_queries::FIND_USER_BY_USERNAME)
+            .bind(username)
+            .fetch_optional(&self.pg_pool)
+            .await
+            .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+
+        Ok(user)
+    }
+
     async fn exists_by_email(&self, email: &str) -> Result<bool, AuthError> {
         let (exists,): (bool,) = sqlx::query_as(user_queries::EXISTS_BY_EMAIL)
             .bind(email)
@@ -63,6 +73,56 @@ impl UserRepo for PgUserRepo {
             .map_err(map_sqlx_error)?;
 
         Ok(user)
+    }
+
+    async fn delete(&self, user_id: uuid::Uuid) -> Result<bool, AuthError> {
+        let result = sqlx::query(user_queries::DELETE_USER)
+            .bind(user_id)
+            .execute(&self.pg_pool)
+            .await
+            .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn activate(&self, user_id: uuid::Uuid) -> Result<bool, AuthError> {
+        let result = sqlx::query(user_queries::ACTIVATE_USER)
+            .bind(user_id)
+            .execute(&self.pg_pool)
+            .await
+            .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn deactivate(&self, user_id: uuid::Uuid) -> Result<bool, AuthError> {
+        let result = sqlx::query(user_queries::DEACTIVATE_USER)
+            .bind(user_id)
+            .execute(&self.pg_pool)
+            .await
+            .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn is_active(&self, user_id: uuid::Uuid) -> Result<Option<bool>, AuthError> {
+        let row: Option<(bool,)> = sqlx::query_as(user_queries::GET_IS_ACTIVE)
+            .bind(user_id)
+            .fetch_optional(&self.pg_pool)
+            .await
+            .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+
+        Ok(row.map(|(v,)| v))
+    }
+
+    async fn is_verified(&self, user_id: uuid::Uuid) -> Result<Option<bool>, AuthError> {
+        let row: Option<(bool,)> = sqlx::query_as(user_queries::GET_IS_VERIFIED)
+            .bind(user_id)
+            .fetch_optional(&self.pg_pool)
+            .await
+            .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+
+        Ok(row.map(|(v,)| v))
     }
 }
 

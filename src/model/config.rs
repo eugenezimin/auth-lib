@@ -19,6 +19,7 @@ pub struct Config {
 /// PostgreSQL connection settings.
 #[derive(Debug, Clone)]
 pub struct DatabaseConfig {
+    pub backend: DatabaseBackend,
     pub host: String,
     pub port: u16,
     pub user: String,
@@ -28,6 +29,13 @@ pub struct DatabaseConfig {
     pub max_pool_size: u32,
     /// How long to wait for a connection before giving up.
     pub connect_timeout: Duration,
+}
+
+#[derive(Debug, Clone)]
+pub enum DatabaseBackend {
+    Postgres,
+    MySQL,
+    Mongo,
 }
 
 /// JWT signing / verification settings.
@@ -70,6 +78,7 @@ pub enum ConfigError {
 /// or use the chainable builder helpers on this struct.
 #[derive(Debug, Clone, Default)]
 pub struct RawConfig {
+    pub db_backend: Option<DatabaseBackend>,
     pub db_host: Option<String>,
     pub db_port: Option<u16>,
     pub db_user: Option<String>,
