@@ -46,6 +46,9 @@ pub struct PgUserRepo {
 pub struct PgRoleRepo {
     pub pg_pool: sqlx::PgPool,
 }
+pub struct PgUserRoleRepo {
+    pub pg_pool: sqlx::PgPool,
+}
 
 /// Build a `sqlx` connection pool from a [`DatabaseConfig`].
 ///
@@ -60,7 +63,7 @@ pub struct PgRoleRepo {
 /// # Example
 ///
 /// ```rust,ignore
-/// use auth_lib::storage::pg_pool::build_pool;
+/// use auth_lib::storage::postgres::pg_pool::build_pool;
 /// use auth_lib::model::config::Config;
 ///
 /// Config::init().expect("config failed");

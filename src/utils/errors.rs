@@ -35,6 +35,12 @@ pub enum AuthError {
 
     /// A catch-all for unexpected internal failures.
     Internal(String),
+
+    /// The user already has the role being assigned.
+    RoleAlreadyAssigned,
+
+    /// The user does not have the role being revoked.
+    RoleNotAssigned,
 }
 
 // ── Display ───────────────────────────────────────────────────────────────────
@@ -53,6 +59,8 @@ impl std::fmt::Display for AuthError {
             Self::HashingError(msg) => write!(f, "password hashing error: {msg}"),
             Self::DatabaseError(msg) => write!(f, "database error: {msg}"),
             Self::Internal(msg) => write!(f, "internal error: {msg}"),
+            Self::RoleAlreadyAssigned => write!(f, "user already has this role"),
+            Self::RoleNotAssigned => write!(f, "user does not have this role"),
         }
     }
 }

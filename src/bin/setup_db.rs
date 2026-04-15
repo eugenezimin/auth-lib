@@ -18,7 +18,7 @@ use sqlx::postgres::PgPoolOptions;
 
 const SQL_FILE: &str = "src/model/migrations/postgres.sql";
 
-const MANAGED_TABLES: &[&str] = &["sessions", "user_roles", "users", "roles"];
+const MANAGED_TABLES: &[&str] = &["sessions", "users_roles", "users", "roles"];
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 

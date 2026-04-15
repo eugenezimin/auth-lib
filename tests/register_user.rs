@@ -14,71 +14,15 @@
 ///
 /// Each test does cleanup → create → assert → cleanup to ensure it can be re-run without manual DB resets.
 ///
-use std::sync::Arc;
+mod helpers;
 
 use auth_lib::{
-    auth::register::AuthServiceImpl,
-    interfaces::{auth::AuthService, config::DirectLoader, db::user_repo::UserRepo},
-    model::{
-        config::{Config, DatabaseBackend, RawConfig},
-        user::{NewUser, RegisterRequest, RegisterResponse},
-    },
-    storage::{
-        db_factory::build_user_repo,
-        postgres::pg_pool::{PgUserRepo, build_pool},
-    },
+    interfaces::auth::AuthService,
+    model::user::{NewUser, RegisterRequest, RegisterResponse},
     utils::errors::AuthError,
 };
 
-fn init_config() -> &'static Config {
-    if Config::is_initialized() {
-        return Config::global();
-    }
-
-    Config::init_with(DirectLoader::new(
-        RawConfig::default()
-            .db_backend(DatabaseBackend::Postgres)
-            .db_host("localhost")
-            .db_port(5432)
-            .db_user("postgres")
-            .db_password("passw")
-            .db_name("auth")
-            .db_max_pool_size(20)
-            .db_connect_timeout_secs(10)
-            .jwt_secret("my-very-long-jwt-signing-secret")
-            .jwt_access_expiry_secs(900)
-            .jwt_refresh_expiry_secs(604_800)
-            .jwt_issuer("auth-lib-test"),
-    ))
-    .expect("Failed to load config from environment")
-}
-
-async fn make_repo() -> Arc<dyn UserRepo> {
-    let cfg = init_config();
-    build_user_repo(&cfg.database)
-        .await
-        .expect("Failed to build user repo")
-}
-
-async fn make_service() -> AuthServiceImpl {
-    let cfg = init_config();
-    let pool = build_pool(&cfg.database)
-        .await
-        .expect("Failed to build DB pool");
-    let user_repo = Arc::new(PgUserRepo::new(pool));
-    AuthServiceImpl::new(user_repo)
-}
-
-async fn cleanup_user(
-    repo: &Arc<dyn UserRepo>,
-    email: &str,
-) -> Result<Option<uuid::Uuid>, AuthError> {
-    if let Some(user) = repo.find_by_email(email).await? {
-        repo.delete(user.id).await?;
-        return Ok(Some(user.id));
-    }
-    Ok(None)
-}
+use crate::helpers::{cleanup_user_by_email, make_service, make_user_repo};
 
 fn valid_request() -> RegisterRequest {
     RegisterRequest {
@@ -96,9 +40,9 @@ fn valid_request() -> RegisterRequest {
 
 #[tokio::test]
 async fn test_register_success() {
-    let repo = make_repo().await;
+    let repo = make_user_repo().await;
     let service = make_service().await;
-    cleanup_user(&repo, "alice@example.com")
+    cleanup_user_by_email(&repo, "alice@example.com")
         .await
         .expect("cleanup of alice@example.com failed");
 
@@ -132,16 +76,16 @@ async fn test_register_success() {
         "hash should use argon2 or bcrypt, got: {hash}"
     );
 
-    cleanup_user(&repo, "alice@example.com")
+    cleanup_user_by_email(&repo, "alice@example.com")
         .await
         .expect("cleanup of alice@example.com failed");
 }
 
 #[tokio::test]
 async fn test_register_minimal_fields() {
-    let repo = make_repo().await;
+    let repo = make_user_repo().await;
     let service = make_service().await;
-    cleanup_user(&repo, "minimal@example.com")
+    cleanup_user_by_email(&repo, "minimal@example.com")
         .await
         .expect("cleanup of minimal@example.com failed");
 
@@ -171,7 +115,7 @@ async fn test_register_minimal_fields() {
     assert!(user.first_name.is_none());
     assert!(user.last_name.is_none());
 
-    cleanup_user(&repo, "minimal@example.com")
+    cleanup_user_by_email(&repo, "minimal@example.com")
         .await
         .expect("cleanup of minimal@example.com failed");
 }
@@ -182,9 +126,9 @@ async fn test_register_minimal_fields() {
 
 #[tokio::test]
 async fn test_register_duplicate_email() {
-    let repo = make_repo().await;
+    let repo = make_user_repo().await;
     let service = make_service().await;
-    cleanup_user(&repo, "dup@example.com")
+    cleanup_user_by_email(&repo, "dup@example.com")
         .await
         .expect("cleanup of dup@example.com failed");
 
@@ -211,19 +155,19 @@ async fn test_register_duplicate_email() {
         "Expected AuthError::EmailAlreadyTaken, got: {err:?}"
     );
 
-    cleanup_user(&repo, "dup@example.com")
+    cleanup_user_by_email(&repo, "dup@example.com")
         .await
         .expect("cleanup of dup@example.com failed");
 }
 
 #[tokio::test]
 async fn test_register_duplicate_username() {
-    let repo = make_repo().await;
+    let repo = make_user_repo().await;
     let service = make_service().await;
-    cleanup_user(&repo, "user_a@example.com")
+    cleanup_user_by_email(&repo, "user_a@example.com")
         .await
         .expect("cleanup of user_a@example.com failed");
-    cleanup_user(&repo, "user_b@example.com")
+    cleanup_user_by_email(&repo, "user_b@example.com")
         .await
         .expect("cleanup of user_b@example.com failed");
 
@@ -257,10 +201,10 @@ async fn test_register_duplicate_username() {
         "Expected AuthError::UsernameAlreadyTaken, got: {err:?}"
     );
 
-    cleanup_user(&repo, "user_a@example.com")
+    cleanup_user_by_email(&repo, "user_a@example.com")
         .await
         .expect("cleanup of user_a@example.com failed");
-    cleanup_user(&repo, "user_b@example.com")
+    cleanup_user_by_email(&repo, "user_b@example.com")
         .await
         .expect("cleanup of user_b@example.com failed");
 }
@@ -339,8 +283,8 @@ async fn test_register_short_password_rejected() {
 
 #[tokio::test]
 async fn test_db_unique_index_rejects_duplicate_email() {
-    let repo = make_repo().await;
-    cleanup_user(&repo, "idx@example.com")
+    let repo = make_user_repo().await;
+    cleanup_user_by_email(&repo, "idx@example.com")
         .await
         .expect("cleanup of idx@example.com failed");
 
@@ -370,7 +314,7 @@ async fn test_db_unique_index_rejects_duplicate_email() {
         "Expected a DB uniqueness violation, got: {err:?}"
     );
 
-    cleanup_user(&repo, "idx@example.com")
+    cleanup_user_by_email(&repo, "idx@example.com")
         .await
         .expect("cleanup of idx@example.com failed");
 }
