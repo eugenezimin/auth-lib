@@ -20,7 +20,11 @@ use crate::interfaces::auth::AuthService;
 use crate::interfaces::db::role_repo::RoleRepo;
 use crate::interfaces::db::user_repo::UserRepo;
 use crate::interfaces::db::user_role_repo::UserRoleRepo;
-use crate::model::user::{NewUser, RegisterRequest, RegisterResponse};
+use crate::model::config::DatabaseConfig;
+use crate::model::role::{NewRole, Role};
+use crate::model::user::{NewUser, RegisterRequest, RegisterResponse, User};
+use crate::storage::db_factory::{build_role_repo, build_user_repo, build_user_role_repo};
+use crate::storage::postgres::pg_pool::build_pool;
 use crate::utils::errors::AuthError;
 
 /// Concrete implementation of [`AuthService`].
@@ -42,16 +46,26 @@ pub struct AuthServiceImpl {
 }
 
 impl AuthServiceImpl {
-    pub fn new(
-        user_repo: Arc<dyn UserRepo>,
-        role_repo: Arc<dyn RoleRepo>,
-        user_role_repo: Arc<dyn crate::interfaces::db::user_role_repo::UserRoleRepo>,
-    ) -> Self {
-        Self {
+    pub async fn build(db_config: &DatabaseConfig) -> Result<Arc<dyn AuthService>, AuthError> {
+        let pool = build_pool(db_config)
+            .await
+            .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+
+        let user_repo = build_user_repo(db_config)
+            .await
+            .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+        let role_repo = build_role_repo(db_config)
+            .await
+            .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+        let user_role_repo = build_user_role_repo(db_config)
+            .await
+            .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+
+        Ok(Arc::new(Self {
             user_repo,
             role_repo,
             user_role_repo,
-        }
+        }))
     }
 }
 
@@ -110,6 +124,62 @@ impl AuthService for AuthServiceImpl {
             email: user.email,
             username: user.username,
         })
+    }
+    async fn find_user_by_id(&self, user_id: uuid::Uuid) -> Result<Option<User>, AuthError> {
+        self.user_repo.find_by_id(user_id).await
+    }
+    async fn find_user_by_email(&self, email: &str) -> Result<Option<User>, AuthError> {
+        self.user_repo.find_by_email(email).await
+    }
+    async fn find_user_by_username(&self, username: &str) -> Result<Option<User>, AuthError> {
+        self.user_repo.find_by_username(username).await
+    }
+    async fn update_user(
+        &self,
+        user_id: uuid::Uuid,
+        update: RegisterRequest,
+    ) -> Result<Option<User>, AuthError> {
+        self.user_repo.update(user_id, update).await
+    }
+    async fn delete_user(&self, user_id: uuid::Uuid) -> Result<Option<uuid::Uuid>, AuthError> {
+        self.user_repo.delete(user_id).await?;
+        Ok(Some(user_id))
+    }
+    async fn activate_user(&self, user_id: uuid::Uuid) -> Result<bool, AuthError> {
+        self.user_repo.activate(user_id).await
+    }
+    async fn deactivate_user(&self, user_id: uuid::Uuid) -> Result<bool, AuthError> {
+        self.user_repo.deactivate(user_id).await
+    }
+    async fn create_role(&self, new_role: &NewRole) -> Result<Role, AuthError> {
+        self.role_repo.create(new_role).await
+    }
+    async fn find_role_by_id(&self, role_id: uuid::Uuid) -> Result<Option<Role>, AuthError> {
+        self.role_repo.find_by_id(role_id).await
+    }
+    async fn find_role_by_name(&self, name: &str) -> Result<Option<Role>, AuthError> {
+        self.role_repo.find_by_name(name).await
+    }
+    async fn list_roles_for_user(&self) -> Result<Vec<Role>, AuthError> {
+        self.role_repo.list_all().await
+    }
+    async fn delete_role(&self, role_id: uuid::Uuid) -> Result<Option<uuid::Uuid>, AuthError> {
+        self.role_repo.delete(role_id).await?;
+        Ok(Some(role_id))
+    }
+    async fn assign_role(
+        &self,
+        user_id: uuid::Uuid,
+        role_id: uuid::Uuid,
+    ) -> Result<bool, AuthError> {
+        self.user_role_repo.assign(user_id, role_id).await
+    }
+    async fn revoke_role(
+        &self,
+        user_id: uuid::Uuid,
+        role_id: uuid::Uuid,
+    ) -> Result<bool, AuthError> {
+        self.user_role_repo.revoke(user_id, role_id).await
     }
 }
 

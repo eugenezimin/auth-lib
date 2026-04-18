@@ -12,6 +12,15 @@ pub const INSERT_USER: &str = r#"
         is_active, is_verified, created_at, updated_at
 "#;
 
+pub const FIND_USER_BY_ID: &str = r#"
+    SELECT
+        id, email, password_hash, jwt_secret, username,
+        first_name, last_name, avatar_url,
+        is_active, is_verified, created_at, updated_at
+    FROM users
+    WHERE id = $1
+"#;
+
 pub const FIND_USER_BY_EMAIL: &str = r#"
     SELECT
         id, email, password_hash, jwt_secret, username,
@@ -56,4 +65,19 @@ pub const GET_IS_ACTIVE: &str = r#"
 
 pub const GET_IS_VERIFIED: &str = r#"
     SELECT is_verified FROM users WHERE id = $1
+"#;
+
+pub const UPDATE_USER: &str = r#"
+    UPDATE users
+    SET email = $1,
+        password_hash = $2,
+        username = $3,
+        first_name = $4,
+        last_name = $5,
+        updated_at = CURRENT_TIMESTAMP
+    WHERE id = $6
+    RETURNING
+        id, email, password_hash, jwt_secret, username,
+        first_name, last_name, avatar_url,
+        is_active, is_verified, created_at, updated_at
 "#;

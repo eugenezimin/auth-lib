@@ -28,7 +28,8 @@
 /// ```
 use async_trait::async_trait;
 
-use crate::model::user::{RegisterRequest, RegisterResponse};
+use crate::model::role::{NewRole, Role};
+use crate::model::user::{RegisterRequest, RegisterResponse, User};
 use crate::utils::errors::AuthError;
 
 // ── Trait ─────────────────────────────────────────────────────────────────────
@@ -43,27 +44,36 @@ use crate::utils::errors::AuthError;
 /// hold shared state (e.g. a connection pool) without interior mutability.
 #[async_trait]
 pub trait AuthService: Send + Sync {
-    /// Register a new user account.
-    ///
-    /// # Steps an implementation should perform
-    ///
-    /// 1. **Validate** `req.email` and `req.password` (format, strength).
-    /// 2. **Check uniqueness** — return [`AuthError::EmailAlreadyTaken`] or
-    ///    [`AuthError::UsernameAlreadyTaken`] if a conflict is found.
-    /// 3. **Hash** the plaintext password before storage.
-    /// 4. **Persist** the new user row.
-    /// 5. **Return** a [`RegisterResponse`] with non-sensitive fields.
-    ///
-    /// # Errors
-    /// |-------------------------------------|-------------------------------------------|
-    /// | Variant                             | When                                      |
-    /// |-------------------------------------|-------------------------------------------|
-    /// | [`AuthError::EmailAlreadyTaken`]    | Another user already has this email       |
-    /// | [`AuthError::UsernameAlreadyTaken`] | Another user already has this username    |
-    /// | [`AuthError::InvalidEmail`]         | Email does not pass format validation     |
-    /// | [`AuthError::WeakPassword`]         | Password does not meet requirements       |
-    /// | [`AuthError::HashingError`]         | bcrypt / argon2 failure                   |
-    /// | [`AuthError::DatabaseError`]        | Persistence layer returned an error       |
-    /// |-------------------------------------|-------------------------------------------|
+    /// Section 1: User registration and management
     async fn register(&self, req: RegisterRequest) -> Result<RegisterResponse, AuthError>;
+    async fn find_user_by_id(&self, user_id: uuid::Uuid) -> Result<Option<User>, AuthError>;
+    async fn find_user_by_email(&self, email: &str) -> Result<Option<User>, AuthError>;
+    async fn find_user_by_username(&self, username: &str) -> Result<Option<User>, AuthError>;
+    async fn update_user(
+        &self,
+        user_id: uuid::Uuid,
+        update: RegisterRequest,
+    ) -> Result<Option<User>, AuthError>;
+    async fn delete_user(&self, user_id: uuid::Uuid) -> Result<Option<uuid::Uuid>, AuthError>;
+    async fn activate_user(&self, user_id: uuid::Uuid) -> Result<bool, AuthError>;
+    async fn deactivate_user(&self, user_id: uuid::Uuid) -> Result<bool, AuthError>;
+
+    /// Section 2: Role management
+    async fn create_role(&self, name: &NewRole) -> Result<Role, AuthError>;
+    async fn find_role_by_id(&self, role_id: uuid::Uuid) -> Result<Option<Role>, AuthError>;
+    async fn find_role_by_name(&self, name: &str) -> Result<Option<Role>, AuthError>;
+    async fn list_roles(&self) -> Result<Vec<Role>, AuthError>;
+    async fn delete_role(&self, role_id: uuid::Uuid) -> Result<Option<uuid::Uuid>, AuthError>;
+
+    /// Section 3: User-role assignments
+    async fn assign_role(
+        &self,
+        user_id: uuid::Uuid,
+        role_id: uuid::Uuid,
+    ) -> Result<bool, AuthError>;
+    async fn revoke_role(
+        &self,
+        user_id: uuid::Uuid,
+        role_id: uuid::Uuid,
+    ) -> Result<bool, AuthError>;
 }

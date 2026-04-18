@@ -9,19 +9,12 @@
 use std::sync::Arc;
 
 use auth_lib::{
-    auth::register::AuthServiceImpl,
-    interfaces::{
-        config::DirectLoader,
-        db::{role_repo::RoleRepo, user_repo::UserRepo, user_role_repo::UserRoleRepo},
-    },
+    auth::service::AuthServiceImpl,
+    interfaces::{auth::AuthService, config::DirectLoader},
     model::{
         config::{Config, DatabaseBackend, RawConfig},
         role::{NewRole, Role},
-        user::{self, NewUser, RegisterRequest, User},
-    },
-    storage::{
-        db_factory::{build_role_repo, build_user_repo, build_user_role_repo},
-        postgres::pg_pool::{PgRoleRepo, PgUserRepo, PgUserRoleRepo, build_pool},
+        user::{RegisterRequest, RegisterResponse},
     },
     utils::errors::AuthError,
 };
@@ -52,37 +45,12 @@ pub fn init_config() -> &'static Config {
 
 // ── Repo factories ────────────────────────────────────────────────────────────
 
-pub async fn make_user_repo() -> Arc<dyn UserRepo> {
+pub async fn make_service() -> Arc<dyn AuthService> {
     let cfg = init_config();
-    build_user_repo(&cfg.database)
+    let service: Arc<dyn AuthService> = AuthServiceImpl::build(&cfg.database)
         .await
-        .expect("Failed to build user repo")
-}
-
-pub async fn make_role_repo() -> Arc<dyn RoleRepo> {
-    let cfg = init_config();
-    build_role_repo(&cfg.database)
-        .await
-        .expect("Failed to build role repo")
-}
-
-pub async fn make_user_role_repo() -> Arc<dyn UserRoleRepo> {
-    let cfg = init_config();
-    build_user_role_repo(&cfg.database)
-        .await
-        .expect("Failed to build user_role repo")
-}
-
-pub async fn make_service() -> AuthServiceImpl {
-    let cfg = init_config();
-    let pool = build_pool(&cfg.database)
-        .await
-        .expect("Failed to build DB pool");
-    let user_repo = Arc::new(PgUserRepo::new(pool.clone()));
-    let role_repo = Arc::new(PgRoleRepo::new(pool.clone()));
-    let user_role_repo = Arc::new(PgUserRoleRepo::new(pool));
-
-    return AuthServiceImpl::new(user_repo, role_repo, user_role_repo);
+        .expect("Failed to build auth service");
+    service
 }
 
 // ── Unique name generator ─────────────────────────────────────────────────────
@@ -102,36 +70,38 @@ pub fn unique_email(prefix: &str) -> String {
 ///
 /// The email is unique per call — no cleanup needed before creation.
 /// Always clean up with [`cleanup_user_by_id`] after the test.
-pub async fn create_test_user(repo: &Arc<dyn UserRepo>) -> User {
-    let new_user = NewUser {
+pub async fn create_test_user(service: &Arc<dyn AuthService>) -> RegisterResponse {
+    let new_user = RegisterRequest {
         email: unique_email("test_user"),
-        password_hash: "$argon2id$v=19$m=19456,t=2,p=1$stub$stub".into(),
-        jwt_secret: uuid::Uuid::new_v4().to_string(),
+        password: "blablabla".into(),
         username: None,
         first_name: None,
         last_name: None,
     };
-    repo.create(new_user)
+    service
+        .register(new_user)
         .await
         .expect("create_test_user failed")
 }
 
 /// Delete a user by ID; returns `true` if a row was removed.
 pub async fn cleanup_user_by_id(
-    repo: &Arc<dyn UserRepo>,
+    service: &Arc<dyn AuthService>,
     id: uuid::Uuid,
 ) -> Result<bool, AuthError> {
-    repo.delete(id).await
+    service.delete_user(id).await.map(|res| res.is_some())
 }
 
 /// Delete a user by email if they exist.
 pub async fn cleanup_user_by_email(
-    repo: &Arc<dyn UserRepo>,
+    service: &Arc<dyn AuthService>,
     email: &str,
 ) -> Result<Option<uuid::Uuid>, AuthError> {
-    if let Some(user) = repo.find_by_email(email).await? {
-        repo.delete(user.id).await?;
-        return Ok(Some(user.id));
+    let user_id = service.find_user_by_email(email).await?.map(|user| user.id);
+
+    if let Some(id) = user_id {
+        service.delete_user(id).await?;
+        return Ok(Some(id));
     }
     Ok(None)
 }
@@ -149,31 +119,32 @@ pub fn make_register_request(email: &str, password: &str) -> RegisterRequest {
 // ── Role helpers ──────────────────────────────────────────────────────────────
 
 /// Insert a role with a unique name and return the persisted [`Role`].
-pub async fn create_test_role(repo: &Arc<dyn RoleRepo>) -> Role {
+pub async fn create_test_role(service: &Arc<dyn AuthService>) -> Role {
     let name = unique_name("test_role");
-    repo.create(NewRole {
-        name,
-        description: Some("Created by test helper".into()),
-    })
-    .await
-    .expect("create_test_role failed")
+    service
+        .create_role(&NewRole {
+            name,
+            description: Some("Created by test helper".into()),
+        })
+        .await
+        .expect("create_test_role failed")
 }
 
 /// Delete a role by ID; returns `true` if a row was removed.
 pub async fn cleanup_role_by_id(
-    repo: &Arc<dyn RoleRepo>,
-    id: uuid::Uuid,
-) -> Result<bool, AuthError> {
-    repo.delete(id).await
+    service: &Arc<dyn AuthService>,
+    role_id: uuid::Uuid,
+) -> Result<Option<uuid::Uuid>, AuthError> {
+    service.delete_role(role_id).await
 }
 
 /// Delete a role by name if it exists.
 pub async fn cleanup_role_by_name(
-    repo: &Arc<dyn RoleRepo>,
+    service: &Arc<dyn AuthService>,
     name: &str,
 ) -> Result<Option<uuid::Uuid>, AuthError> {
-    if let Some(role) = repo.find_by_name(name).await? {
-        repo.delete(role.id).await?;
+    if let Some(role) = service.find_role_by_name(name).await? {
+        service.delete_role(role.id).await?;
         return Ok(Some(role.id));
     }
     Ok(None)

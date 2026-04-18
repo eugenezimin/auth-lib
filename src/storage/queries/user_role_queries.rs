@@ -10,6 +10,7 @@
 pub const INSERT_USER_ROLE: &str = r#"
     INSERT INTO users_roles (user_id, role_id)
     VALUES ($1, $2)
+    ON CONFLICT DO NOTHING
     RETURNING id, user_id, role_id, assigned_at, revoked_at
 "#;
 

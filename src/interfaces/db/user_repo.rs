@@ -54,7 +54,7 @@
 /// ```
 use async_trait::async_trait;
 
-use crate::model::user::{NewUser, User};
+use crate::model::user::{NewUser, RegisterRequest, User};
 use crate::utils::errors::AuthError;
 
 /// Persistence contract for the `users` table.
@@ -63,7 +63,12 @@ use crate::utils::errors::AuthError;
 /// Implementations must be `Send + Sync` so they can be held behind `Arc`
 /// and shared across async tasks.
 #[async_trait]
-pub trait UserRepo: Send + Sync {
+pub(crate) trait UserRepo: Send + Sync {
+    /// Fetch a user by their UUID.
+    /// Returns `Ok(None)` when no matching row is found — callers should treat
+    /// this as "user does not exist" rather than an error.
+    async fn find_by_id(&self, user_id: uuid::Uuid) -> Result<Option<User>, AuthError>;
+
     /// Fetch a user by their email address.
     ///
     /// Returns `Ok(None)` when no matching row is found — callers should treat
@@ -96,6 +101,18 @@ pub trait UserRepo: Send + Sync {
     /// a freshly generated `jwt_secret`.
     async fn create(&self, new_user: NewUser) -> Result<User, AuthError>;
 
+    /// Update user fields based on a [`RegisterRequest`].
+    ///
+    /// This is a convenience method for the service layer to update all mutable
+    /// fields in one shot, including re-hashing the password and validating the email format.
+    /// Returns `Ok(())` if the update was successful, or an appropriate `AuthError` if the user
+    /// does not exist or if validation fails.
+    async fn update(
+        &self,
+        user_id: uuid::Uuid,
+        update: RegisterRequest,
+    ) -> Result<Option<User>, AuthError>;
+
     /// Permanently delete a user row by their UUID.
     ///
     /// This is a hard delete — the row is gone, and any foreign-keyed rows
@@ -104,7 +121,7 @@ pub trait UserRepo: Send + Sync {
     ///
     /// Returns `Ok(true)` if a row was deleted, `Ok(false)` if no matching
     /// row was found (idempotent — callers need not treat this as an error).
-    async fn delete(&self, user_id: uuid::Uuid) -> Result<bool, AuthError>;
+    async fn delete(&self, user_id: uuid::Uuid) -> Result<Option<uuid::Uuid>, AuthError>;
 
     /// Set `is_active = true` for the given user.
     ///

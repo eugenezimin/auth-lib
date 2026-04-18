@@ -1,2 +1,2 @@
-pub mod password;
-pub mod register;
+pub(crate) mod password;
+pub mod service;

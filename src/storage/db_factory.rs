@@ -6,7 +6,7 @@ use crate::{
 };
 use std::sync::Arc;
 
-pub async fn build_user_repo(cfg: &DatabaseConfig) -> Result<Arc<dyn UserRepo>, AuthError> {
+pub(crate) async fn build_user_repo(cfg: &DatabaseConfig) -> Result<Arc<dyn UserRepo>, AuthError> {
     match cfg.backend {
         DatabaseBackend::Postgres => {
             let pool = pg_pool::build_pool(cfg)
@@ -19,7 +19,7 @@ pub async fn build_user_repo(cfg: &DatabaseConfig) -> Result<Arc<dyn UserRepo>, 
     }
 }
 
-pub async fn build_role_repo(cfg: &DatabaseConfig) -> Result<Arc<dyn RoleRepo>, AuthError> {
+pub(crate) async fn build_role_repo(cfg: &DatabaseConfig) -> Result<Arc<dyn RoleRepo>, AuthError> {
     match cfg.backend {
         DatabaseBackend::Postgres => {
             let pool = pg_pool::build_pool(cfg)
@@ -32,7 +32,7 @@ pub async fn build_role_repo(cfg: &DatabaseConfig) -> Result<Arc<dyn RoleRepo>, 
     }
 }
 
-pub async fn build_user_role_repo(
+pub(crate) async fn build_user_role_repo(
     cfg: &DatabaseConfig,
 ) -> Result<Arc<dyn crate::interfaces::db::user_role_repo::UserRoleRepo>, AuthError> {
     match cfg.backend {

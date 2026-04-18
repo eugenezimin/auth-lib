@@ -10,14 +10,14 @@ use crate::storage::queries::role_queries;
 use crate::utils::errors::AuthError;
 
 impl PgRoleRepo {
-    pub fn new(pg_pool: sqlx::PgPool) -> Self {
+    pub(crate) fn new(pg_pool: sqlx::PgPool) -> Self {
         Self { pg_pool }
     }
 }
 
 #[async_trait]
 impl RoleRepo for PgRoleRepo {
-    async fn create(&self, new_role: NewRole) -> Result<Role, AuthError> {
+    async fn create(&self, new_role: &NewRole) -> Result<Role, AuthError> {
         let role = sqlx::query_as(role_queries::INSERT_ROLE)
             .bind(&new_role.name)
             .bind(&new_role.description)

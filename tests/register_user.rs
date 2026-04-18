@@ -22,7 +22,7 @@ use auth_lib::{
     utils::errors::AuthError,
 };
 
-use crate::helpers::{cleanup_user_by_email, make_service, make_user_repo};
+use crate::helpers::{cleanup_user_by_email, make_service};
 
 fn valid_request() -> RegisterRequest {
     RegisterRequest {
@@ -40,9 +40,8 @@ fn valid_request() -> RegisterRequest {
 
 #[tokio::test]
 async fn test_register_success() {
-    let repo = make_user_repo().await;
     let service = make_service().await;
-    cleanup_user_by_email(&repo, "alice@example.com")
+    cleanup_user_by_email(&service, "alice@example.com")
         .await
         .expect("cleanup of alice@example.com failed");
 
@@ -55,8 +54,8 @@ async fn test_register_success() {
     assert_eq!(res.email, "alice@example.com");
     assert_eq!(res.username, Some("alice".into()));
 
-    let user = repo
-        .find_by_email("alice@example.com")
+    let user = service
+        .find_user_by_email("alice@example.com")
         .await
         .expect("DB query failed")
         .expect("user should exist in DB after registration");
@@ -76,16 +75,15 @@ async fn test_register_success() {
         "hash should use argon2 or bcrypt, got: {hash}"
     );
 
-    cleanup_user_by_email(&repo, "alice@example.com")
+    cleanup_user_by_email(&service, "alice@example.com")
         .await
         .expect("cleanup of alice@example.com failed");
 }
 
 #[tokio::test]
 async fn test_register_minimal_fields() {
-    let repo = make_user_repo().await;
     let service = make_service().await;
-    cleanup_user_by_email(&repo, "minimal@example.com")
+    cleanup_user_by_email(&service, "minimal@example.com")
         .await
         .expect("cleanup of minimal@example.com failed");
 
@@ -105,8 +103,8 @@ async fn test_register_minimal_fields() {
     assert_eq!(res.email, "minimal@example.com");
     assert!(res.username.is_none());
 
-    let user = repo
-        .find_by_email("minimal@example.com")
+    let user = service
+        .find_user_by_email("minimal@example.com")
         .await
         .expect("DB query failed")
         .expect("user should exist in DB");
@@ -115,7 +113,7 @@ async fn test_register_minimal_fields() {
     assert!(user.first_name.is_none());
     assert!(user.last_name.is_none());
 
-    cleanup_user_by_email(&repo, "minimal@example.com")
+    cleanup_user_by_email(&service, "minimal@example.com")
         .await
         .expect("cleanup of minimal@example.com failed");
 }
@@ -126,9 +124,8 @@ async fn test_register_minimal_fields() {
 
 #[tokio::test]
 async fn test_register_duplicate_email() {
-    let repo = make_user_repo().await;
     let service = make_service().await;
-    cleanup_user_by_email(&repo, "dup@example.com")
+    cleanup_user_by_email(&service, "dup@example.com")
         .await
         .expect("cleanup of dup@example.com failed");
 
@@ -155,19 +152,18 @@ async fn test_register_duplicate_email() {
         "Expected AuthError::EmailAlreadyTaken, got: {err:?}"
     );
 
-    cleanup_user_by_email(&repo, "dup@example.com")
+    cleanup_user_by_email(&service, "dup@example.com")
         .await
         .expect("cleanup of dup@example.com failed");
 }
 
 #[tokio::test]
 async fn test_register_duplicate_username() {
-    let repo = make_user_repo().await;
     let service = make_service().await;
-    cleanup_user_by_email(&repo, "user_a@example.com")
+    cleanup_user_by_email(&service, "user_a@example.com")
         .await
         .expect("cleanup of user_a@example.com failed");
-    cleanup_user_by_email(&repo, "user_b@example.com")
+    cleanup_user_by_email(&service, "user_b@example.com")
         .await
         .expect("cleanup of user_b@example.com failed");
 
@@ -201,10 +197,10 @@ async fn test_register_duplicate_username() {
         "Expected AuthError::UsernameAlreadyTaken, got: {err:?}"
     );
 
-    cleanup_user_by_email(&repo, "user_a@example.com")
+    cleanup_user_by_email(&service, "user_a@example.com")
         .await
         .expect("cleanup of user_a@example.com failed");
-    cleanup_user_by_email(&repo, "user_b@example.com")
+    cleanup_user_by_email(&service, "user_b@example.com")
         .await
         .expect("cleanup of user_b@example.com failed");
 }
@@ -283,26 +279,26 @@ async fn test_register_short_password_rejected() {
 
 #[tokio::test]
 async fn test_db_unique_index_rejects_duplicate_email() {
-    let repo = make_user_repo().await;
-    cleanup_user_by_email(&repo, "idx@example.com")
+    let service = make_service().await;
+    cleanup_user_by_email(&service, "idx@example.com")
         .await
         .expect("cleanup of idx@example.com failed");
 
-    let new_user = NewUser {
-        email: "idx@example.com".into(),
-        password_hash: "argon2_hashed_value".into(),
-        jwt_secret: "some-random-secret".into(),
+    let register_request = RegisterRequest {
+        email: "short_pw@example.com".into(),
+        password: "abc".into(),
         username: None,
         first_name: None,
         last_name: None,
     };
 
-    repo.create(new_user.clone())
+    service
+        .register(register_request.clone())
         .await
         .expect("First insert should succeed");
 
-    let err = repo
-        .create(new_user)
+    let err = service
+        .register(register_request)
         .await
         .expect_err("Second insert with the same email must fail at DB level");
 
@@ -314,7 +310,7 @@ async fn test_db_unique_index_rejects_duplicate_email() {
         "Expected a DB uniqueness violation, got: {err:?}"
     );
 
-    cleanup_user_by_email(&repo, "idx@example.com")
+    cleanup_user_by_email(&service, "idx@example.com")
         .await
         .expect("cleanup of idx@example.com failed");
 }

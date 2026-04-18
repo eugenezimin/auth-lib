@@ -4,28 +4,28 @@
 use async_trait::async_trait;
 
 use crate::interfaces::db::user_role_repo::UserRoleRepo;
-use crate::model::user_role::{NewUserRole, UserRole};
+use crate::model::user_role::UserRole;
 use crate::storage::postgres::pg_pool::PgUserRoleRepo;
 use crate::storage::queries::user_role_queries;
 use crate::utils::errors::AuthError;
 
 impl PgUserRoleRepo {
-    pub fn new(pg_pool: sqlx::PgPool) -> Self {
+    pub(crate) fn new(pg_pool: sqlx::PgPool) -> Self {
         Self { pg_pool }
     }
 }
 
 #[async_trait]
 impl UserRoleRepo for PgUserRoleRepo {
-    async fn assign(&self, new: NewUserRole) -> Result<UserRole, AuthError> {
-        let user_role = sqlx::query_as(user_role_queries::INSERT_USER_ROLE)
-            .bind(new.user_id)
-            .bind(new.role_id)
-            .fetch_one(&self.pg_pool)
+    async fn assign(&self, user_id: uuid::Uuid, role_id: uuid::Uuid) -> Result<bool, AuthError> {
+        let row: Option<UserRole> = sqlx::query_as(user_role_queries::INSERT_USER_ROLE)
+            .bind(user_id)
+            .bind(role_id)
+            .fetch_optional(&self.pg_pool)
             .await
-            .map_err(map_sqlx_error)?;
+            .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
 
-        Ok(user_role)
+        Ok(row.is_some())
     }
 
     async fn revoke(&self, user_id: uuid::Uuid, role_id: uuid::Uuid) -> Result<bool, AuthError> {

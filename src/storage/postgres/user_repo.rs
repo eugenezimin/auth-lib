@@ -7,19 +7,28 @@
 /// Uses the non-macro `sqlx::query_as` API so no `DATABASE_URL` is
 /// required at compile time.
 use crate::interfaces::db::user_repo::UserRepo;
-use crate::model::user::{NewUser, User};
+use crate::model::user::{NewUser, RegisterRequest, User};
 use crate::storage::postgres::pg_pool::PgUserRepo;
 use crate::storage::queries::user_queries;
 use crate::utils::errors::AuthError;
 
 impl PgUserRepo {
-    pub fn new(pg_pool: sqlx::PgPool) -> Self {
+    pub(crate) fn new(pg_pool: sqlx::PgPool) -> Self {
         Self { pg_pool }
     }
 }
 
 #[async_trait::async_trait]
 impl UserRepo for PgUserRepo {
+    async fn find_by_id(&self, user_id: uuid::Uuid) -> Result<Option<User>, AuthError> {
+        let user: Option<User> = sqlx::query_as(user_queries::FIND_USER_BY_ID)
+            .bind(user_id)
+            .fetch_optional(&self.pg_pool)
+            .await
+            .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+
+        Ok(user)
+    }
     async fn find_by_email(&self, email: &str) -> Result<Option<User>, AuthError> {
         let user: Option<User> = sqlx::query_as(user_queries::FIND_USER_BY_EMAIL)
             .bind(email)
@@ -75,14 +84,18 @@ impl UserRepo for PgUserRepo {
         Ok(user)
     }
 
-    async fn delete(&self, user_id: uuid::Uuid) -> Result<bool, AuthError> {
+    async fn delete(&self, user_id: uuid::Uuid) -> Result<Option<uuid::Uuid>, AuthError> {
         let result = sqlx::query(user_queries::DELETE_USER)
             .bind(user_id)
             .execute(&self.pg_pool)
             .await
             .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
 
-        Ok(result.rows_affected() > 0)
+        Ok(if result.rows_affected() > 0 {
+            Some(user_id)
+        } else {
+            None
+        })
     }
 
     async fn activate(&self, user_id: uuid::Uuid) -> Result<bool, AuthError> {
@@ -123,6 +136,25 @@ impl UserRepo for PgUserRepo {
             .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
 
         Ok(row.map(|(v,)| v))
+    }
+
+    async fn update(
+        &self,
+        user_id: uuid::Uuid,
+        update: RegisterRequest,
+    ) -> Result<Option<User>, AuthError> {
+        let user = sqlx::query_as(user_queries::UPDATE_USER)
+            .bind(&update.email)
+            .bind(&update.password)
+            .bind(&update.username)
+            .bind(&update.first_name)
+            .bind(&update.last_name)
+            .bind(user_id)
+            .fetch_optional(&self.pg_pool)
+            .await
+            .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+
+        Ok(user)
     }
 }
 

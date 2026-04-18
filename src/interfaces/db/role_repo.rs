@@ -13,12 +13,12 @@ use crate::utils::errors::AuthError;
 /// All methods are `Send + Sync` so implementations can be held behind `Arc`
 /// and shared across async tasks.
 #[async_trait]
-pub trait RoleRepo: Send + Sync {
+pub(crate) trait RoleRepo: Send + Sync {
     /// Insert a new role row and return the fully hydrated [`Role`].
     ///
     /// Returns [`AuthError::DatabaseError`] on a name uniqueness violation or
     /// any other persistence failure.
-    async fn create(&self, new_role: NewRole) -> Result<Role, AuthError>;
+    async fn create(&self, new_role: &NewRole) -> Result<Role, AuthError>;
 
     /// Fetch a role by its UUID.
     ///

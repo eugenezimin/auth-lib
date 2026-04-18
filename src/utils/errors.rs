@@ -41,6 +41,9 @@ pub enum AuthError {
 
     /// The user does not have the role being revoked.
     RoleNotAssigned,
+
+    /// No user was found for the given identifier.
+    UserNotFound,
 }
 
 // ── Display ───────────────────────────────────────────────────────────────────
@@ -61,6 +64,7 @@ impl std::fmt::Display for AuthError {
             Self::Internal(msg) => write!(f, "internal error: {msg}"),
             Self::RoleAlreadyAssigned => write!(f, "user already has this role"),
             Self::RoleNotAssigned => write!(f, "user does not have this role"),
+            Self::UserNotFound => write!(f, "no user found with the given identifier"),
         }
     }
 }

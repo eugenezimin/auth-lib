@@ -42,7 +42,7 @@ pub struct UserRole {
 /// The caller does **not** set `assigned_at` — the database default
 /// (`CURRENT_TIMESTAMP`) handles it.
 #[derive(Debug, Clone)]
-pub struct NewUserRole {
-    pub user_id: uuid::Uuid,
-    pub role_id: uuid::Uuid,
+pub(crate) struct NewUserRole {
+    pub(crate) user_id: uuid::Uuid,
+    pub(crate) role_id: uuid::Uuid,
 }

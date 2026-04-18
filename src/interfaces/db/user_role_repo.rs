@@ -68,7 +68,7 @@ use crate::utils::errors::AuthError;
 /// All methods are `Send + Sync` so implementations can be held behind `Arc`
 /// and shared across async tasks.
 #[async_trait]
-pub trait UserRoleRepo: Send + Sync {
+pub(crate) trait UserRoleRepo: Send + Sync {
     /// Assign a role to a user (insert a new active row).
     ///
     /// # Errors
@@ -76,7 +76,7 @@ pub trait UserRoleRepo: Send + Sync {
     /// Returns [`AuthError::RoleAlreadyAssigned`] if an active `(user_id,
     /// role_id)` pair already exists (DB constraint `unique_user_role_active`).
     /// Returns [`AuthError::DatabaseError`] for any other persistence failure.
-    async fn assign(&self, new: NewUserRole) -> Result<UserRole, AuthError>;
+    async fn assign(&self, user_id: uuid::Uuid, role_id: uuid::Uuid) -> Result<bool, AuthError>;
 
     /// Revoke a role from a user by stamping `revoked_at = NOW()`.
     ///

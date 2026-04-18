@@ -13,7 +13,7 @@ use sqlx::postgres::PgPoolOptions;
 use crate::model::config::DatabaseConfig;
 
 #[derive(Debug)]
-pub enum PoolBuildError {
+pub(crate) enum PoolBuildError {
     /// sqlx rejected the configuration or could not connect.
     Config(String),
 }
@@ -39,15 +39,15 @@ impl std::error::Error for PoolBuildError {}
 ///
 /// let repo = Arc::new(PgUserRepo::new(pool.clone()));
 /// ```
-pub struct PgUserRepo {
-    pub pg_pool: PgPool,
+pub(crate) struct PgUserRepo {
+    pub(crate) pg_pool: PgPool,
 }
 /// PostgreSQL-backed role repository.
-pub struct PgRoleRepo {
-    pub pg_pool: sqlx::PgPool,
+pub(crate) struct PgRoleRepo {
+    pub(crate) pg_pool: sqlx::PgPool,
 }
-pub struct PgUserRoleRepo {
-    pub pg_pool: sqlx::PgPool,
+pub(crate) struct PgUserRoleRepo {
+    pub(crate) pg_pool: sqlx::PgPool,
 }
 
 /// Build a `sqlx` connection pool from a [`DatabaseConfig`].
@@ -69,7 +69,7 @@ pub struct PgUserRoleRepo {
 /// Config::init().expect("config failed");
 /// let pool = build_pool(&Config::global().database).await.expect("pool failed");
 /// ```
-pub async fn build_pool(cfg: &DatabaseConfig) -> Result<PgPool, PoolBuildError> {
+pub(crate) async fn build_pool(cfg: &DatabaseConfig) -> Result<PgPool, PoolBuildError> {
     PgPoolOptions::new()
         .max_connections(cfg.max_pool_size)
         .acquire_timeout(cfg.connect_timeout)

@@ -1,3 +1,3 @@
-pub mod db_factory;
-pub mod postgres;
-pub mod queries;
+pub(crate) mod db_factory;
+pub(crate) mod postgres;
+pub(crate) mod queries;
