@@ -19,6 +19,7 @@ use crate::auth::password;
 use crate::interfaces::auth::AuthService;
 use crate::interfaces::db::role_repo::RoleRepo;
 use crate::interfaces::db::user_repo::UserRepo;
+use crate::interfaces::db::user_role_repo::UserRoleRepo;
 use crate::model::user::{NewUser, RegisterRequest, RegisterResponse};
 use crate::utils::errors::AuthError;
 
@@ -37,13 +38,19 @@ use crate::utils::errors::AuthError;
 pub struct AuthServiceImpl {
     user_repo: Arc<dyn UserRepo>,
     role_repo: Arc<dyn RoleRepo>,
+    user_role_repo: Arc<dyn UserRoleRepo>,
 }
 
 impl AuthServiceImpl {
-    pub fn new(user_repo: Arc<dyn UserRepo>, role_repo: Arc<dyn RoleRepo>) -> Self {
+    pub fn new(
+        user_repo: Arc<dyn UserRepo>,
+        role_repo: Arc<dyn RoleRepo>,
+        user_role_repo: Arc<dyn crate::interfaces::db::user_role_repo::UserRoleRepo>,
+    ) -> Self {
         Self {
             user_repo,
             role_repo,
+            user_role_repo,
         }
     }
 }

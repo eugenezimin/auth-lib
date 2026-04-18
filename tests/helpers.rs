@@ -17,7 +17,7 @@ use auth_lib::{
     model::{
         config::{Config, DatabaseBackend, RawConfig},
         role::{NewRole, Role},
-        user::{NewUser, RegisterRequest, User},
+        user::{self, NewUser, RegisterRequest, User},
     },
     storage::{
         db_factory::{build_role_repo, build_user_repo, build_user_role_repo},
@@ -79,9 +79,10 @@ pub async fn make_service() -> AuthServiceImpl {
         .await
         .expect("Failed to build DB pool");
     let user_repo = Arc::new(PgUserRepo::new(pool.clone()));
-    let role_repo = Arc::new(PgRoleRepo::new(pool));
+    let role_repo = Arc::new(PgRoleRepo::new(pool.clone()));
+    let user_role_repo = Arc::new(PgUserRoleRepo::new(pool));
 
-    return AuthServiceImpl::new(user_repo, role_repo);
+    return AuthServiceImpl::new(user_repo, role_repo, user_role_repo);
 }
 
 // ── Unique name generator ─────────────────────────────────────────────────────
