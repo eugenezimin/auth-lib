@@ -9,60 +9,55 @@
 ///   cargo test --test role_user -- --test-threads=1
 /// or:
 ///   cargo test --test role_user
-use std::sync::Arc;
+mod helpers;
 
-use auth_lib::{
-    interfaces::config::DirectLoader,
-    interfaces::db::role_repo::RoleRepo,
-    model::config::{Config, DatabaseBackend, RawConfig},
-    model::role::NewRole,
-    storage::db_factory::build_role_repo,
-    utils::errors::AuthError,
-};
+use auth_lib::model::role::NewRole;
+
+use crate::helpers::{cleanup_role_by_name, make_role_repo, unique_name};
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
-fn init_config() -> &'static Config {
-    if Config::is_initialized() {
-        return Config::global();
-    }
+// fn init_config() -> &'static Config {
+//     if Config::is_initialized() {
+//         return Config::global();
+//     }
 
-    Config::init_with(DirectLoader::new(
-        RawConfig::default()
-            .db_backend(DatabaseBackend::Postgres)
-            .db_host("localhost")
-            .db_port(5432)
-            .db_user("postgres")
-            .db_password("passw")
-            .db_name("auth")
-            .db_max_pool_size(20)
-            .db_connect_timeout_secs(10)
-            .jwt_secret("my-very-long-jwt-signing-secret")
-            .jwt_access_expiry_secs(900)
-            .jwt_refresh_expiry_secs(604_800)
-            .jwt_issuer("auth-lib-test"),
-    ))
-    .expect("Failed to load config")
-}
+//     Config::init_with(DirectLoader::new(
+//         RawConfig::default()
+//             .db_backend(DatabaseBackend::Postgres)
+//             .db_host("localhost")
+//             .db_port(5432)
+//             .db_user("postgres")
+//             .db_password("passw")
+//             .db_name("auth")
+//             .db_max_pool_size(20)
+//             .db_connect_timeout_secs(10)
+//             .jwt_secret("my-very-long-jwt-signing-secret")
+//             .jwt_access_expiry_secs(900)
+//             .jwt_refresh_expiry_secs(604_800)
+//             .jwt_issuer("auth-lib-test"),
+//     ))
+//     .expect("Failed to load config")
+// }
 
-async fn make_repo() -> Arc<dyn RoleRepo> {
-    let cfg = init_config();
-    build_role_repo(&cfg.database)
-        .await
-        .expect("Failed to build role repo")
-}
+// async fn make_repo() -> Arc<dyn RoleRepo> {
+//     let cfg = init_config();
+//     build_role_repo(&cfg.database)
+//         .await
+//         .expect("Failed to build role repo")
+// }
 
-/// Delete a role by name if it exists. Returns the deleted UUID, or None.
-async fn cleanup_role(
-    repo: &Arc<dyn RoleRepo>,
-    name: &str,
-) -> Result<Option<uuid::Uuid>, AuthError> {
-    if let Some(role) = repo.find_by_name(name).await? {
-        repo.delete(role.id).await?;
-        return Ok(Some(role.id));
-    }
-    Ok(None)
-}
+// /// Delete a role by name if it exists. Returns the deleted UUID, or None.
+// async fn cleanup_role(
+//     repo: &Arc<dyn RoleRepo>,
+//     name: &str,
+// ) -> Result<Option<uuid::Uuid>, AuthError> {
+//     if let Some(role) = repo.find_by_name(name).await? {
+//         repo.delete(role.id).await?;
+//         return Ok(Some(role.id));
+//     }
+//     Ok(None)
+// }
 
 fn new_role(name: &str) -> NewRole {
     NewRole {
@@ -71,15 +66,15 @@ fn new_role(name: &str) -> NewRole {
     }
 }
 
-fn unique_name(base: &str) -> String {
-    format!("{base}_{}", uuid::Uuid::new_v4().simple())
-}
+// fn unique_name(base: &str) -> String {
+//     format!("{base}_{}", uuid::Uuid::new_v4().simple())
+// }
 
 // ── Happy-path tests ──────────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn test_create_role_success() {
-    let repo = make_repo().await;
+    let repo = make_role_repo().await;
     let name = unique_name("admin");
 
     let role = repo
@@ -94,12 +89,14 @@ async fn test_create_role_success() {
         Some(format!("Description for {name}").as_str())
     );
 
-    cleanup_role(&repo, &name).await.expect("cleanup failed");
+    cleanup_role_by_name(&repo, &name)
+        .await
+        .expect("cleanup failed");
 }
 
 #[tokio::test]
 async fn test_create_role_no_description() {
-    let repo = make_repo().await;
+    let repo = make_role_repo().await;
     let name = unique_name("guest");
 
     let role = repo
@@ -113,12 +110,14 @@ async fn test_create_role_no_description() {
     assert_eq!(role.name, name);
     assert!(role.description.is_none());
 
-    cleanup_role(&repo, &name).await.expect("cleanup failed");
+    cleanup_role_by_name(&repo, &name)
+        .await
+        .expect("cleanup failed");
 }
 
 #[tokio::test]
 async fn test_find_by_id_returns_role() {
-    let repo = make_repo().await;
+    let repo = make_role_repo().await;
     let name = unique_name("moderator");
 
     let created = repo.create(new_role(&name)).await.expect("create failed");
@@ -131,12 +130,14 @@ async fn test_find_by_id_returns_role() {
     assert_eq!(found.id, created.id);
     assert_eq!(found.name, name);
 
-    cleanup_role(&repo, &name).await.expect("cleanup failed");
+    cleanup_role_by_name(&repo, &name)
+        .await
+        .expect("cleanup failed");
 }
 
 #[tokio::test]
 async fn test_find_by_id_returns_none_for_missing() {
-    let repo = make_repo().await;
+    let repo = make_role_repo().await;
 
     let result = repo
         .find_by_id(uuid::Uuid::new_v4())
@@ -148,7 +149,7 @@ async fn test_find_by_id_returns_none_for_missing() {
 
 #[tokio::test]
 async fn test_find_by_name_returns_role() {
-    let repo = make_repo().await;
+    let repo = make_role_repo().await;
     let name = unique_name("editor");
 
     repo.create(new_role(&name)).await.expect("create failed");
@@ -161,12 +162,14 @@ async fn test_find_by_name_returns_role() {
 
     assert_eq!(found.name, name);
 
-    cleanup_role(&repo, &name).await.expect("cleanup failed");
+    cleanup_role_by_name(&repo, &name)
+        .await
+        .expect("cleanup failed");
 }
 
 #[tokio::test]
 async fn test_find_by_name_returns_none_for_missing() {
-    let repo = make_repo().await;
+    let repo = make_role_repo().await;
 
     let result = repo
         .find_by_name(&unique_name("nonexistent"))
@@ -178,7 +181,7 @@ async fn test_find_by_name_returns_none_for_missing() {
 
 #[tokio::test]
 async fn test_list_all_includes_created_roles() {
-    let repo = make_repo().await;
+    let repo = make_role_repo().await;
     let alpha = unique_name("list_alpha");
     let beta = unique_name("list_beta");
 
@@ -197,17 +200,17 @@ async fn test_list_all_includes_created_roles() {
 
     // Both names share the same base prefix so their UUID suffixes determine
     // sort order — we can't assert relative position, only presence.
-    cleanup_role(&repo, &alpha)
+    cleanup_role_by_name(&repo, &alpha)
         .await
         .expect("cleanup alpha failed");
-    cleanup_role(&repo, &beta)
+    cleanup_role_by_name(&repo, &beta)
         .await
         .expect("cleanup beta failed");
 }
 
 #[tokio::test]
 async fn test_delete_role_returns_true() {
-    let repo = make_repo().await;
+    let repo = make_role_repo().await;
     let name = unique_name("to_delete");
 
     let created = repo.create(new_role(&name)).await.expect("create failed");
@@ -224,7 +227,7 @@ async fn test_delete_role_returns_true() {
 
 #[tokio::test]
 async fn test_delete_missing_role_returns_false() {
-    let repo = make_repo().await;
+    let repo = make_role_repo().await;
 
     let deleted = repo
         .delete(uuid::Uuid::new_v4())
@@ -236,7 +239,7 @@ async fn test_delete_missing_role_returns_false() {
 
 #[tokio::test]
 async fn test_exists_by_name_true_after_create() {
-    let repo = make_repo().await;
+    let repo = make_role_repo().await;
     let name = unique_name("exists_check");
 
     repo.create(new_role(&name)).await.expect("create failed");
@@ -247,12 +250,14 @@ async fn test_exists_by_name_true_after_create() {
         .expect("exists_by_name failed");
     assert!(exists);
 
-    cleanup_role(&repo, &name).await.expect("cleanup failed");
+    cleanup_role_by_name(&repo, &name)
+        .await
+        .expect("cleanup failed");
 }
 
 #[tokio::test]
 async fn test_exists_by_name_false_for_missing() {
-    let repo = make_repo().await;
+    let repo = make_role_repo().await;
 
     let exists = repo
         .exists_by_name(&unique_name("absent"))
@@ -264,7 +269,7 @@ async fn test_exists_by_name_false_for_missing() {
 
 #[tokio::test]
 async fn test_create_duplicate_name_fails() {
-    let repo = make_repo().await;
+    let repo = make_role_repo().await;
     let name = unique_name("unique_role");
 
     repo.create(new_role(&name))
@@ -285,12 +290,14 @@ async fn test_create_duplicate_name_fails() {
         "Expected a uniqueness violation, got: {err:?}"
     );
 
-    cleanup_role(&repo, &name).await.expect("cleanup failed");
+    cleanup_role_by_name(&repo, &name)
+        .await
+        .expect("cleanup failed");
 }
 
 #[tokio::test]
 async fn test_db_unique_index_rejects_duplicate_name() {
-    let repo = make_repo().await;
+    let repo = make_role_repo().await;
     let name = unique_name("idx_role");
 
     let first = NewRole {
@@ -320,5 +327,7 @@ async fn test_db_unique_index_rejects_duplicate_name() {
         "Expected a DB uniqueness violation, got: {err:?}"
     );
 
-    cleanup_role(&repo, &name).await.expect("cleanup failed");
+    cleanup_role_by_name(&repo, &name)
+        .await
+        .expect("cleanup failed");
 }
