@@ -22,17 +22,9 @@
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct UserRole {
     pub id: uuid::Uuid,
-
-    /// FK → `users.id`
     pub user_id: uuid::Uuid,
-
-    /// FK → `roles.id`
     pub role_id: uuid::Uuid,
-
-    /// When the role was granted.
     pub assigned_at: chrono::DateTime<chrono::Utc>,
-
-    /// `None` while the assignment is active; `Some(ts)` once revoked.
     pub revoked_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 

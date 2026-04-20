@@ -20,15 +20,8 @@
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct Role {
     pub id: uuid::Uuid,
-
-    /// Unique role name — `varchar(50) NOT NULL`.
-    /// Enforced at DB level via `CREATE UNIQUE INDEX roles_name_key`.
     pub name: String,
-
-    /// Optional human-readable description — `text`, nullable.
     pub description: Option<String>,
-
-    /// Row creation timestamp — `timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP`.
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 

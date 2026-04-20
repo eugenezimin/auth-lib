@@ -36,8 +36,8 @@ pub(crate) trait RoleRepo: Send + Sync {
     /// Delete a role row by UUID.
     ///
     /// Cascades to `user_roles` via `ON DELETE CASCADE`.
-    /// Returns `Ok(true)` if a row was deleted, `Ok(false)` if not found.
-    async fn delete(&self, id: uuid::Uuid) -> Result<bool, AuthError>;
+    /// Returns `Ok(Some(id))` if a row was deleted, `Ok(None)` if not found.
+    async fn delete(&self, id: uuid::Uuid) -> Result<Option<uuid::Uuid>, AuthError>;
 
     /// Returns `true` if a role with the given name already exists.
     async fn exists_by_name(&self, name: &str) -> Result<bool, AuthError>;

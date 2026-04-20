@@ -39,6 +39,51 @@ pub const FIND_USER_BY_USERNAME: &str = r#"
     WHERE username = $1
 "#;
 
+pub const FIND_USER_WITH_ROLES_BY_ID: &str = r#"
+    SELECT
+        u.id, u.email, u.password_hash, u.jwt_secret, u.username,
+        u.first_name, u.last_name, u.avatar_url,
+        u.is_active, u.is_verified, u.created_at, u.updated_at,
+        r.id          AS role_id,
+        r.name        AS role_name,
+        r.description AS role_description,
+        r.created_at  AS role_created_at
+    FROM      users u
+    LEFT JOIN users_roles ur ON ur.user_id = u.id AND ur.revoked_at IS NULL
+    LEFT JOIN roles r        ON r.id = ur.role_id
+    WHERE     u.id = $1
+"#;
+
+pub const FIND_USER_WITH_ROLES_BY_EMAIL: &str = r#"
+    SELECT
+        u.id, u.email, u.password_hash, u.jwt_secret, u.username,
+        u.first_name, u.last_name, u.avatar_url,
+        u.is_active, u.is_verified, u.created_at, u.updated_at,
+        r.id          AS role_id,
+        r.name        AS role_name,
+        r.description AS role_description,
+        r.created_at  AS role_created_at
+    FROM      users u
+    LEFT JOIN users_roles ur ON ur.user_id = u.id AND ur.revoked_at IS NULL
+    LEFT JOIN roles r        ON r.id = ur.role_id
+    WHERE     u.email = $1
+"#;
+
+pub const FIND_USER_WITH_ROLES_BY_USERNAME: &str = r#"
+    SELECT
+        u.id, u.email, u.password_hash, u.jwt_secret, u.username,
+        u.first_name, u.last_name, u.avatar_url,
+        u.is_active, u.is_verified, u.created_at, u.updated_at,
+        r.id          AS role_id,
+        r.name        AS role_name,
+        r.description AS role_description,
+        r.created_at  AS role_created_at
+    FROM      users u
+    LEFT JOIN users_roles ur ON ur.user_id = u.id AND ur.revoked_at IS NULL
+    LEFT JOIN roles r        ON r.id = ur.role_id
+    WHERE     u.username = $1
+"#;
+
 pub const EXISTS_BY_EMAIL: &str = r#"
     SELECT EXISTS(SELECT 1 FROM users WHERE email = $1)
 "#;

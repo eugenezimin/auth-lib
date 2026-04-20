@@ -45,10 +45,12 @@ async fn test_register_success() {
         .await
         .expect("cleanup of alice@example.com failed");
 
-    let res: RegisterResponse = service
-        .register(valid_request())
-        .await
-        .expect("Registration should succeed");
+    let res: RegisterResponse = RegisterResponse::from_user(
+        service
+            .register(valid_request())
+            .await
+            .expect("Registration should succeed"),
+    );
 
     assert!(!res.user_id.to_string().is_empty(), "user_id must be set");
     assert_eq!(res.email, "alice@example.com");
@@ -286,7 +288,7 @@ async fn test_db_unique_index_rejects_duplicate_email() {
 
     let register_request = RegisterRequest {
         email: "short_pw@example.com".into(),
-        password: "abc".into(),
+        password: "BlaBlaBla123!".into(),
         username: None,
         first_name: None,
         last_name: None,

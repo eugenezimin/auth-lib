@@ -57,14 +57,18 @@ impl RoleRepo for PgRoleRepo {
         Ok(roles)
     }
 
-    async fn delete(&self, id: uuid::Uuid) -> Result<bool, AuthError> {
+    async fn delete(&self, id: uuid::Uuid) -> Result<Option<uuid::Uuid>, AuthError> {
         let result = sqlx::query(role_queries::DELETE_ROLE)
             .bind(id)
             .execute(&self.pg_pool)
             .await
             .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
 
-        Ok(result.rows_affected() > 0)
+        Ok(if result.rows_affected() > 0 {
+            Some(id)
+        } else {
+            None
+        })
     }
 
     async fn exists_by_name(&self, name: &str) -> Result<bool, AuthError> {

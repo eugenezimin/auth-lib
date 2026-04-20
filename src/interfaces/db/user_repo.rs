@@ -54,7 +54,7 @@
 /// ```
 use async_trait::async_trait;
 
-use crate::model::user::{NewUser, RegisterRequest, User};
+use crate::model::user::{NewUser, RegisterRequest, User, UserWithRoles};
 use crate::utils::errors::AuthError;
 
 /// Persistence contract for the `users` table.
@@ -86,6 +86,20 @@ pub(crate) trait UserRepo: Send + Sync {
     /// Prefer this over `find_by_email` in registration flows where the full
     /// `User` struct is not needed — it maps to a lightweight `SELECT EXISTS`
     /// query that avoids fetching all columns.
+
+    async fn find_with_roles_by_id(
+        &self,
+        user_id: uuid::Uuid,
+    ) -> Result<Option<UserWithRoles>, AuthError>;
+    async fn find_with_roles_by_email(
+        &self,
+        email: &str,
+    ) -> Result<Option<UserWithRoles>, AuthError>;
+    async fn find_with_roles_by_username(
+        &self,
+        username: &str,
+    ) -> Result<Option<UserWithRoles>, AuthError>;
+
     async fn exists_by_email(&self, email: &str) -> Result<bool, AuthError>;
 
     /// Returns `true` if a row with the given username already exists.

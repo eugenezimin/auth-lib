@@ -29,7 +29,7 @@
 use async_trait::async_trait;
 
 use crate::model::role::{NewRole, Role};
-use crate::model::user::{RegisterRequest, RegisterResponse, User};
+use crate::model::user::{RegisterRequest, User, UserWithRoles};
 use crate::utils::errors::AuthError;
 
 // ── Trait ─────────────────────────────────────────────────────────────────────
@@ -45,10 +45,22 @@ use crate::utils::errors::AuthError;
 #[async_trait]
 pub trait AuthService: Send + Sync {
     /// Section 1: User registration and management
-    async fn register(&self, req: RegisterRequest) -> Result<RegisterResponse, AuthError>;
+    async fn register(&self, req: RegisterRequest) -> Result<User, AuthError>;
     async fn find_user_by_id(&self, user_id: uuid::Uuid) -> Result<Option<User>, AuthError>;
     async fn find_user_by_email(&self, email: &str) -> Result<Option<User>, AuthError>;
     async fn find_user_by_username(&self, username: &str) -> Result<Option<User>, AuthError>;
+    async fn find_user_with_roles_by_id(
+        &self,
+        user_id: uuid::Uuid,
+    ) -> Result<Option<UserWithRoles>, AuthError>;
+    async fn find_user_with_roles_by_email(
+        &self,
+        email: &str,
+    ) -> Result<Option<UserWithRoles>, AuthError>;
+    async fn find_user_with_roles_by_username(
+        &self,
+        username: &str,
+    ) -> Result<Option<UserWithRoles>, AuthError>;
     async fn update_user(
         &self,
         user_id: uuid::Uuid,
@@ -62,6 +74,7 @@ pub trait AuthService: Send + Sync {
     async fn create_role(&self, name: &NewRole) -> Result<Role, AuthError>;
     async fn find_role_by_id(&self, role_id: uuid::Uuid) -> Result<Option<Role>, AuthError>;
     async fn find_role_by_name(&self, name: &str) -> Result<Option<Role>, AuthError>;
+    async fn exists_role_by_name(&self, name: &str) -> Result<bool, AuthError>;
     async fn list_roles(&self) -> Result<Vec<Role>, AuthError>;
     async fn delete_role(&self, role_id: uuid::Uuid) -> Result<Option<uuid::Uuid>, AuthError>;
 

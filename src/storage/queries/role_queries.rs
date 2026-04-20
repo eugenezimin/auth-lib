@@ -27,7 +27,7 @@ pub const LIST_ALL_ROLES: &str = r#"
 "#;
 
 pub const DELETE_ROLE: &str = r#"
-    DELETE FROM roles WHERE id = $1
+    DELETE FROM roles WHERE id = $1 RETURNING id
 "#;
 
 pub const EXISTS_BY_NAME: &str = r#"

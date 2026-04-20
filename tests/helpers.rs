@@ -78,10 +78,12 @@ pub async fn create_test_user(service: &Arc<dyn AuthService>) -> RegisterRespons
         first_name: None,
         last_name: None,
     };
-    service
-        .register(new_user)
-        .await
-        .expect("create_test_user failed")
+    RegisterResponse::from_user(
+        service
+            .register(new_user)
+            .await
+            .expect("create_test_user failed"),
+    )
 }
 
 /// Delete a user by ID; returns `true` if a row was removed.

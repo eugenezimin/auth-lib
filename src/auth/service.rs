@@ -22,7 +22,7 @@ use crate::interfaces::db::user_repo::UserRepo;
 use crate::interfaces::db::user_role_repo::UserRoleRepo;
 use crate::model::config::DatabaseConfig;
 use crate::model::role::{NewRole, Role};
-use crate::model::user::{NewUser, RegisterRequest, RegisterResponse, User};
+use crate::model::user::{NewUser, RegisterRequest, RegisterResponse, User, UserWithRoles};
 use crate::storage::db_factory::{build_role_repo, build_user_repo, build_user_role_repo};
 use crate::storage::postgres::pg_pool::build_pool;
 use crate::utils::errors::AuthError;
@@ -86,9 +86,9 @@ impl AuthService for AuthServiceImpl {
     ///       ├─ 6. generate jwt_secret
     ///       ├─ 7. repo.create(NewUser)      → AuthError::DatabaseError
     ///       │
-    ///       └─ RegisterResponse { user_id, email, username }
+    ///       └─ User wit empty roles
     /// ```
-    async fn register(&self, req: RegisterRequest) -> Result<RegisterResponse, AuthError> {
+    async fn register(&self, req: RegisterRequest) -> Result<User, AuthError> {
         validate_email(&req.email)?;
         validate_password(&req.password)?;
 
@@ -119,11 +119,7 @@ impl AuthService for AuthServiceImpl {
 
         let user = self.user_repo.create(new_user).await?;
 
-        Ok(RegisterResponse {
-            user_id: user.id,
-            email: user.email,
-            username: user.username,
-        })
+        Ok(user)
     }
     async fn find_user_by_id(&self, user_id: uuid::Uuid) -> Result<Option<User>, AuthError> {
         self.user_repo.find_by_id(user_id).await
@@ -134,6 +130,25 @@ impl AuthService for AuthServiceImpl {
     async fn find_user_by_username(&self, username: &str) -> Result<Option<User>, AuthError> {
         self.user_repo.find_by_username(username).await
     }
+    async fn find_user_with_roles_by_id(
+        &self,
+        user_id: uuid::Uuid,
+    ) -> Result<Option<UserWithRoles>, AuthError> {
+        self.user_repo.find_with_roles_by_id(user_id).await
+    }
+    async fn find_user_with_roles_by_email(
+        &self,
+        email: &str,
+    ) -> Result<Option<UserWithRoles>, AuthError> {
+        self.user_repo.find_with_roles_by_email(email).await
+    }
+    async fn find_user_with_roles_by_username(
+        &self,
+        username: &str,
+    ) -> Result<Option<UserWithRoles>, AuthError> {
+        self.user_repo.find_with_roles_by_username(username).await
+    }
+
     async fn update_user(
         &self,
         user_id: uuid::Uuid,
@@ -160,12 +175,14 @@ impl AuthService for AuthServiceImpl {
     async fn find_role_by_name(&self, name: &str) -> Result<Option<Role>, AuthError> {
         self.role_repo.find_by_name(name).await
     }
-    async fn list_roles_for_user(&self) -> Result<Vec<Role>, AuthError> {
+    async fn exists_role_by_name(&self, name: &str) -> Result<bool, AuthError> {
+        self.role_repo.exists_by_name(name).await
+    }
+    async fn list_roles(&self) -> Result<Vec<Role>, AuthError> {
         self.role_repo.list_all().await
     }
     async fn delete_role(&self, role_id: uuid::Uuid) -> Result<Option<uuid::Uuid>, AuthError> {
-        self.role_repo.delete(role_id).await?;
-        Ok(Some(role_id))
+        self.role_repo.delete(role_id).await
     }
     async fn assign_role(
         &self,
