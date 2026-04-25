@@ -62,3 +62,23 @@ pub fn verify_password(plaintext: &str, stored_hash: &str) -> Result<bool, AuthE
         Err(e) => Err(AuthError::HashingError(e.to_string())),
     }
 }
+
+/// Minimum password strength requirements.
+pub fn validate_password(password: &str) -> Result<(), AuthError> {
+    if password.len() < 8 {
+        return Err(AuthError::WeakPassword(
+            "must be at least 8 characters".into(),
+        ));
+    }
+    if !password.chars().any(|c| c.is_uppercase()) {
+        return Err(AuthError::WeakPassword(
+            "must contain at least one uppercase letter".into(),
+        ));
+    }
+    if !password.chars().any(|c| c.is_ascii_digit()) {
+        return Err(AuthError::WeakPassword(
+            "must contain at least one digit".into(),
+        ));
+    }
+    Ok(())
+}

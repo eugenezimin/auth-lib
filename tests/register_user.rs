@@ -17,8 +17,7 @@
 mod helpers;
 
 use auth_lib::{
-    interfaces::auth::AuthService,
-    model::user::{NewUser, RegisterRequest, RegisterResponse},
+    model::user::{RegisterRequest, RegisterResponse},
     utils::errors::AuthError,
 };
 
@@ -281,24 +280,31 @@ async fn test_register_short_password_rejected() {
 
 #[tokio::test]
 async fn test_db_unique_index_rejects_duplicate_email() {
+    // Create a service which contains a real DB connection to all repos
     let service = make_service().await;
+
+    // Ensure the test email is not present before we start
     cleanup_user_by_email(&service, "idx@example.com")
         .await
         .expect("cleanup of idx@example.com failed");
 
+    // Prepare a registration request with the test email
     let register_request = RegisterRequest {
-        email: "short_pw@example.com".into(),
+        email: "idx@example.com".into(),
         password: "BlaBlaBla123!".into(),
         username: None,
         first_name: None,
         last_name: None,
     };
 
+    // First registration should succeed through the service layer
+    // which talks to the DB and applies all validations
     service
         .register(register_request.clone())
         .await
         .expect("First insert should succeed");
 
+    // Second registration with the same email should fail at the DB level due to the unique index
     let err = service
         .register(register_request)
         .await
@@ -312,6 +318,7 @@ async fn test_db_unique_index_rejects_duplicate_email() {
         "Expected a DB uniqueness violation, got: {err:?}"
     );
 
+    // Cleanup after the test to ensure it can be re-run without manual DB resets
     cleanup_user_by_email(&service, "idx@example.com")
         .await
         .expect("cleanup of idx@example.com failed");

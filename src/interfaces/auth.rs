@@ -71,7 +71,7 @@ pub trait AuthService: Send + Sync {
     async fn deactivate_user(&self, user_id: uuid::Uuid) -> Result<bool, AuthError>;
 
     /// Section 2: Role management
-    async fn create_role(&self, name: &NewRole) -> Result<Role, AuthError>;
+    async fn create_role(&self, role: &NewRole) -> Result<Role, AuthError>;
     async fn find_role_by_id(&self, role_id: uuid::Uuid) -> Result<Option<Role>, AuthError>;
     async fn find_role_by_name(&self, name: &str) -> Result<Option<Role>, AuthError>;
     async fn exists_role_by_name(&self, name: &str) -> Result<bool, AuthError>;

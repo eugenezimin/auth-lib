@@ -14,7 +14,7 @@ use auth_lib::{
     model::{
         config::{Config, DatabaseBackend, RawConfig},
         role::{NewRole, Role},
-        user::{RegisterRequest, RegisterResponse},
+        user::{RegisterRequest, RegisterResponse, User},
     },
     utils::errors::AuthError,
 };
@@ -70,17 +70,25 @@ pub fn unique_email(prefix: &str) -> String {
 ///
 /// The email is unique per call — no cleanup needed before creation.
 /// Always clean up with [`cleanup_user_by_id`] after the test.
-pub async fn create_test_user(service: &Arc<dyn AuthService>) -> RegisterResponse {
-    let new_user = RegisterRequest {
-        email: unique_email("test_user"),
-        password: "blablabla".into(),
-        username: None,
-        first_name: None,
-        last_name: None,
-    };
+pub async fn create_test_user(
+    service: &Arc<dyn AuthService>,
+    user_request: RegisterRequest,
+) -> RegisterResponse {
+    match service
+        .find_user_by_email(&user_request.email)
+        .await
+        .expect("find user by email failed")
+    {
+        Some(u) => {
+            cleanup_user_by_id(&service, u.id)
+                .await
+                .expect("user cleanup failed");
+        }
+        None => {}
+    }
     RegisterResponse::from_user(
         service
-            .register(new_user)
+            .register(user_request.clone())
             .await
             .expect("create_test_user failed"),
     )
@@ -121,13 +129,21 @@ pub fn make_register_request(email: &str, password: &str) -> RegisterRequest {
 // ── Role helpers ──────────────────────────────────────────────────────────────
 
 /// Insert a role with a unique name and return the persisted [`Role`].
-pub async fn create_test_role(service: &Arc<dyn AuthService>) -> Role {
-    let name = unique_name("test_role");
+pub async fn create_test_role(service: &Arc<dyn AuthService>, test_role: &NewRole) -> Role {
+    match service
+        .find_role_by_name(&test_role.name)
+        .await
+        .expect("find_role_by_name failed")
+    {
+        Some(r) => {
+            cleanup_role_by_id(&service, r.id)
+                .await
+                .expect("role cleanup failed");
+        }
+        None => {}
+    }
     service
-        .create_role(&NewRole {
-            name,
-            description: Some("Created by test helper".into()),
-        })
+        .create_role(&test_role.clone())
         .await
         .expect("create_test_role failed")
 }
