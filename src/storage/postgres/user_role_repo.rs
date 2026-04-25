@@ -25,7 +25,12 @@ impl UserRoleRepo for PgUserRoleRepo {
             .await
             .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
 
-        Ok(row.is_some())
+        match row {
+            // A new assignment was created
+            Some(_) => Ok(true),
+            // No row inserted → assignment already exists actively (partial index violation)
+            None => Ok(false),
+        }
     }
 
     async fn revoke(&self, user_id: uuid::Uuid, role_id: uuid::Uuid) -> Result<bool, AuthError> {
@@ -39,33 +44,8 @@ impl UserRoleRepo for PgUserRoleRepo {
         Ok(row.is_some())
     }
 
-    async fn list_active_for_user(&self, user_id: uuid::Uuid) -> Result<Vec<UserRole>, AuthError> {
-        let rows: Vec<UserRole> = sqlx::query_as(user_role_queries::LIST_ACTIVE_FOR_USER)
-            .bind(user_id)
-            .fetch_all(&self.pg_pool)
-            .await
-            .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
-
-        Ok(rows)
-    }
-
-    async fn list_all_for_user(&self, user_id: uuid::Uuid) -> Result<Vec<UserRole>, AuthError> {
-        let rows: Vec<UserRole> = sqlx::query_as(user_role_queries::LIST_ALL_FOR_USER)
-            .bind(user_id)
-            .fetch_all(&self.pg_pool)
-            .await
-            .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
-
-        Ok(rows)
-    }
-
-    async fn is_role_active(
-        &self,
-        user_id: uuid::Uuid,
-        role_id: uuid::Uuid,
-    ) -> Result<bool, AuthError> {
+    async fn is_role_active(&self, role_id: uuid::Uuid) -> Result<bool, AuthError> {
         let (exists,): (bool,) = sqlx::query_as(user_role_queries::IS_ROLE_ACTIVE)
-            .bind(user_id)
             .bind(role_id)
             .fetch_one(&self.pg_pool)
             .await

@@ -45,13 +45,12 @@ pub const LIST_ALL_FOR_USER: &str = r#"
     ORDER  BY assigned_at DESC
 "#;
 
-/// Returns `true` if an active `(user_id, role_id)` assignment exists.
+/// Returns `true` if an active `(role_id)` assignment exists.
 pub const IS_ROLE_ACTIVE: &str = r#"
     SELECT EXISTS(
         SELECT 1
         FROM   users_roles
-        WHERE  user_id    = $1
-          AND  role_id    = $2
+        WHERE  role_id    = $2
           AND  revoked_at IS NULL
     )
 "#;

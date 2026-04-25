@@ -15,14 +15,14 @@ use std::sync::Arc;
 
 use uuid::Uuid;
 
-use crate::auth::password;
+use crate::auth::password::{self, validate_password};
 use crate::interfaces::auth::AuthService;
 use crate::interfaces::db::role_repo::RoleRepo;
 use crate::interfaces::db::user_repo::UserRepo;
 use crate::interfaces::db::user_role_repo::UserRoleRepo;
 use crate::model::config::DatabaseConfig;
 use crate::model::role::{NewRole, Role};
-use crate::model::user::{NewUser, RegisterRequest, RegisterResponse, User, UserWithRoles};
+use crate::model::user::{NewUser, RegisterRequest, User, UserWithRoles};
 use crate::storage::db_factory::{build_role_repo, build_user_repo, build_user_role_repo};
 use crate::storage::postgres::pg_pool::build_pool;
 use crate::utils::errors::AuthError;
@@ -217,24 +217,4 @@ fn validate_email(email: &str) -> Result<(), AuthError> {
             "'{email}' is not a valid email address"
         )))
     }
-}
-
-/// Minimum password strength requirements.
-fn validate_password(password: &str) -> Result<(), AuthError> {
-    if password.len() < 8 {
-        return Err(AuthError::WeakPassword(
-            "must be at least 8 characters".into(),
-        ));
-    }
-    if !password.chars().any(|c| c.is_uppercase()) {
-        return Err(AuthError::WeakPassword(
-            "must contain at least one uppercase letter".into(),
-        ));
-    }
-    if !password.chars().any(|c| c.is_ascii_digit()) {
-        return Err(AuthError::WeakPassword(
-            "must contain at least one digit".into(),
-        ));
-    }
-    Ok(())
 }

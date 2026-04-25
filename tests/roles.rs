@@ -11,12 +11,7 @@
 ///   cargo test --test role_user
 mod helpers;
 
-use std::str::FromStr;
-
-use auth_lib::{
-    auth::service,
-    model::{role::NewRole, user},
-};
+use auth_lib::model::role::NewRole;
 
 use crate::helpers::{cleanup_role_by_name, make_service, unique_name};
 

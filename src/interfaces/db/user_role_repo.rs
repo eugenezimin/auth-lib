@@ -85,23 +85,8 @@ pub(crate) trait UserRoleRepo: Send + Sync {
     /// assignment was found — callers need not treat the latter as an error.
     async fn revoke(&self, user_id: uuid::Uuid, role_id: uuid::Uuid) -> Result<bool, AuthError>;
 
-    /// Return all **active** assignments for a user, ordered by `assigned_at DESC`.
-    ///
-    /// An empty `Vec` means the user currently holds no roles.
-    async fn list_active_for_user(&self, user_id: uuid::Uuid) -> Result<Vec<UserRole>, AuthError>;
-
-    /// Return the **complete history** (active + revoked) for a user, ordered
-    /// by `assigned_at DESC`.
-    ///
-    /// Useful for audit logs and admin views.
-    async fn list_all_for_user(&self, user_id: uuid::Uuid) -> Result<Vec<UserRole>, AuthError>;
-
     /// Returns `true` if the user currently holds the given role (active assignment).
-    async fn is_role_active(
-        &self,
-        user_id: uuid::Uuid,
-        role_id: uuid::Uuid,
-    ) -> Result<bool, AuthError>;
+    async fn is_role_active(&self, role_id: uuid::Uuid) -> Result<bool, AuthError>;
 
     /// Revoke **all** active role assignments for a user in a single statement.
     ///
