@@ -69,7 +69,7 @@ pub(crate) struct PgUserRoleRepo {
 /// Config::init().expect("config failed");
 /// let pool = build_pool(&Config::global().database).await.expect("pool failed");
 /// ```
-pub(crate) async fn build_pool(cfg: &DatabaseConfig) -> Result<PgPool, PoolBuildError> {
+pub(crate) async fn build_pg_pool(cfg: &DatabaseConfig) -> Result<PgPool, PoolBuildError> {
     PgPoolOptions::new()
         .max_connections(cfg.max_pool_size)
         .acquire_timeout(cfg.connect_timeout)
