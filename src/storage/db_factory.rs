@@ -1,48 +1,29 @@
 use crate::{
-    interfaces::db::{role_repo::RoleRepo, user_repo::UserRepo},
-    model::config::{DatabaseBackend, DatabaseConfig},
-    storage::postgres::pg_pool::{self, PgRoleRepo, PgUserRepo, PgUserRoleRepo},
-    utils::errors::AuthError,
+    interfaces::db::{role_repo::RoleRepo, user_repo::UserRepo, user_role_repo::UserRoleRepo},
+    storage::{
+        DbPool,
+        postgres::pg_pool::{PgRoleRepo, PgUserRepo, PgUserRoleRepo},
+    },
 };
 use std::sync::Arc;
 
-pub(crate) async fn build_user_repo(cfg: &DatabaseConfig) -> Result<Arc<dyn UserRepo>, AuthError> {
-    match cfg.backend {
-        DatabaseBackend::Postgres => {
-            let pool = pg_pool::build_pool(cfg)
-                .await
-                .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
-            Ok(Arc::new(PgUserRepo::new(pool)))
-        }
-        DatabaseBackend::MySQL => todo!(),
-        DatabaseBackend::Mongo => todo!(),
+pub(crate) fn build_user_repo(pool: &DbPool) -> Arc<dyn UserRepo> {
+    match pool {
+        DbPool::Postgres(pg) => Arc::new(PgUserRepo::new(pg.clone())),
+        DbPool::MySql(my) => todo!(),
     }
 }
 
-pub(crate) async fn build_role_repo(cfg: &DatabaseConfig) -> Result<Arc<dyn RoleRepo>, AuthError> {
-    match cfg.backend {
-        DatabaseBackend::Postgres => {
-            let pool = pg_pool::build_pool(cfg)
-                .await
-                .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
-            Ok(Arc::new(PgRoleRepo::new(pool)))
-        }
-        DatabaseBackend::MySQL => todo!(),
-        DatabaseBackend::Mongo => todo!(),
+pub(crate) fn build_role_repo(pool: &DbPool) -> Arc<dyn RoleRepo> {
+    match pool {
+        DbPool::Postgres(pg) => Arc::new(PgRoleRepo::new(pg.clone())),
+        DbPool::MySql(my) => todo!(),
     }
 }
 
-pub(crate) async fn build_user_role_repo(
-    cfg: &DatabaseConfig,
-) -> Result<Arc<dyn crate::interfaces::db::user_role_repo::UserRoleRepo>, AuthError> {
-    match cfg.backend {
-        DatabaseBackend::Postgres => {
-            let pool = pg_pool::build_pool(cfg)
-                .await
-                .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
-            Ok(Arc::new(PgUserRoleRepo::new(pool)))
-        }
-        DatabaseBackend::MySQL => todo!(),
-        DatabaseBackend::Mongo => todo!(),
+pub(crate) fn build_user_role_repo(pool: &DbPool) -> Arc<dyn UserRoleRepo> {
+    match pool {
+        DbPool::Postgres(pg) => Arc::new(PgUserRoleRepo::new(pg.clone())),
+        DbPool::MySql(my) => todo!(),
     }
 }

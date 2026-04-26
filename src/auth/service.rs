@@ -15,17 +15,24 @@ use std::sync::Arc;
 
 use uuid::Uuid;
 
-use crate::auth::password::{self, validate_password};
-use crate::interfaces::auth::AuthService;
-use crate::interfaces::db::role_repo::RoleRepo;
-use crate::interfaces::db::user_repo::UserRepo;
-use crate::interfaces::db::user_role_repo::UserRoleRepo;
-use crate::model::config::DatabaseConfig;
-use crate::model::role::{NewRole, Role};
-use crate::model::user::{NewUser, RegisterRequest, User, UserWithRoles};
-use crate::storage::db_factory::{build_role_repo, build_user_repo, build_user_role_repo};
-use crate::storage::postgres::pg_pool::build_pool;
-use crate::utils::errors::AuthError;
+use crate::{
+    auth::password::{self, validate_password},
+    interfaces::{
+        auth::AuthService,
+        db::{role_repo::RoleRepo, user_repo::UserRepo, user_role_repo::UserRoleRepo},
+    },
+    model::{
+        config::{DatabaseBackend, DatabaseConfig},
+        role::{NewRole, Role},
+        user::{NewUser, RegisterRequest, User, UserWithRoles},
+    },
+    storage::{
+        DbPool,
+        db_factory::{build_role_repo, build_user_repo, build_user_role_repo},
+        postgres::pg_pool::build_pg_pool,
+    },
+    utils::errors::AuthError,
+};
 
 /// Concrete implementation of [`AuthService`].
 ///
@@ -47,25 +54,21 @@ pub struct AuthServiceImpl {
 
 impl AuthServiceImpl {
     pub async fn build(db_config: &DatabaseConfig) -> Result<Arc<dyn AuthService>, AuthError> {
-        let pool = build_pool(db_config)
-            .await
-            .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
+        match db_config.backend {
+            DatabaseBackend::Postgres => {
+                let db_pool = build_pg_pool(db_config)
+                    .await
+                    .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
 
-        let user_repo = build_user_repo(db_config)
-            .await
-            .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
-        let role_repo = build_role_repo(db_config)
-            .await
-            .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
-        let user_role_repo = build_user_role_repo(db_config)
-            .await
-            .map_err(|e| AuthError::DatabaseError(e.to_string()))?;
-
-        Ok(Arc::new(Self {
-            user_repo,
-            role_repo,
-            user_role_repo,
-        }))
+                Ok(Arc::new(Self {
+                    user_repo: build_user_repo(&DbPool::Postgres(db_pool.clone())),
+                    role_repo: build_role_repo(&DbPool::Postgres(db_pool.clone())),
+                    user_role_repo: build_user_role_repo(&DbPool::Postgres(db_pool.clone())),
+                }))
+            }
+            DatabaseBackend::MySQL => todo!(),
+            DatabaseBackend::Mongo => todo!(),
+        }
     }
 }
 
