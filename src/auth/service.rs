@@ -24,7 +24,7 @@ use crate::{
     model::{
         config::{DatabaseBackend, DatabaseConfig},
         role::{NewRole, Role},
-        user::{NewUser, RegisterRequest, User, UserWithRoles},
+        user::{LoginRequest, LoginResponse, NewUser, RegisterRequest, User, UserWithRoles},
     },
     storage::{
         DbPool,
@@ -200,6 +200,22 @@ impl AuthService for AuthServiceImpl {
         role_id: uuid::Uuid,
     ) -> Result<bool, AuthError> {
         self.user_role_repo.revoke(user_id, role_id).await
+    }
+
+    async fn login(&self, req: LoginRequest) -> Result<LoginResponse, AuthError> {
+        todo!()
+    }
+    async fn logout(&self, session_id: uuid::Uuid) -> Result<bool, AuthError> {
+        todo!()
+    }
+    async fn logout_all(&self, user_id: uuid::Uuid) -> Result<u64, AuthError> {
+        todo!()
+    }
+    async fn refresh_tokens(&self, refresh_token: &str) -> Result<LoginResponse, AuthError> {
+        todo!()
+    }
+    async fn verify_access_token(&self, access_token: &str) -> Result<uuid::Uuid, AuthError> {
+        todo!()
     }
 }
 

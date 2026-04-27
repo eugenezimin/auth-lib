@@ -29,6 +29,8 @@
 use async_trait::async_trait;
 
 use crate::model::role::{NewRole, Role};
+use crate::model::session::Session;
+use crate::model::user::{LoginRequest, LoginResponse /* existing ones */};
 use crate::model::user::{RegisterRequest, User, UserWithRoles};
 use crate::utils::errors::AuthError;
 
@@ -89,4 +91,11 @@ pub trait AuthService: Send + Sync {
         user_id: uuid::Uuid,
         role_id: uuid::Uuid,
     ) -> Result<bool, AuthError>;
+
+    /// Section 4: Authentication — login / logout / token management
+    async fn login(&self, req: LoginRequest) -> Result<LoginResponse, AuthError>;
+    async fn logout(&self, session_id: uuid::Uuid) -> Result<bool, AuthError>;
+    async fn logout_all(&self, user_id: uuid::Uuid) -> Result<u64, AuthError>;
+    async fn refresh_tokens(&self, refresh_token: &str) -> Result<LoginResponse, AuthError>;
+    async fn verify_access_token(&self, access_token: &str) -> Result<uuid::Uuid, AuthError>;
 }

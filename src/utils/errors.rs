@@ -44,6 +44,18 @@ pub enum AuthError {
 
     /// No user was found for the given identifier.
     UserNotFound,
+
+    /// Email/password combination did not match.
+    InvalidCredentials,
+
+    /// JWT signing or encoding failed.
+    TokenCreationError(String),
+
+    /// The supplied JWT is invalid, expired, or unrecognised.
+    InvalidToken(String),
+
+    /// The token has been explicitly revoked (blocklist hit).
+    TokenRevoked,
 }
 
 // ── Display ───────────────────────────────────────────────────────────────────
@@ -65,6 +77,10 @@ impl std::fmt::Display for AuthError {
             Self::RoleAlreadyAssigned => write!(f, "user already has this role"),
             Self::RoleNotAssigned => write!(f, "user does not have this role"),
             Self::UserNotFound => write!(f, "no user found with the given identifier"),
+            Self::InvalidCredentials => write!(f, "invalid email or password"),
+            Self::TokenCreationError(msg) => write!(f, "token creation error: {msg}"),
+            Self::InvalidToken(msg) => write!(f, "invalid token: {msg}"),
+            Self::TokenRevoked => write!(f, "token has been revoked"),
         }
     }
 }

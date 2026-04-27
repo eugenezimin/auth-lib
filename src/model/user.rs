@@ -132,3 +132,17 @@ impl RegisterResponse {
         }
     }
 }
+
+/// Credentials supplied by the client on login.
+#[derive(Debug, Clone)]
+pub struct LoginRequest {
+    pub email: String,
+    pub password: String,
+}
+
+/// Tokens returned to the client after a successful login.
+#[derive(Debug, Clone)]
+pub struct LoginResponse {
+    pub access_token: String,
+    pub refresh_token: String,
+}
