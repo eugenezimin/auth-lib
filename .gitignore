@@ -1025,5 +1025,6 @@ gradle-app.setting
 *.hprof
 
 *.zed/**
+*.zed
 
 # End of https://www.toptal.com/developers/gitignore/api/go,git,java,rust,venv,linux,macos,gradle,groovy,kotlin,python,haskell,windows,intellij,virtualenv,pythonvanilla,rust-analyzer,jupyternotebooks,visualstudiocode,node,nanoc,pydev,pycharm+all,intellij+all,intellij+iml,nwjs,vue,vuejs,angular,dotenv,maven,react.DS_Store
