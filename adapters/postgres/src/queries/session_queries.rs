@@ -88,6 +88,13 @@ pub const END_SESSION: &str = r#"
     WHERE id = $1 AND status = 'active'
 "#;
 
+/// From `active` or `revoked`; keeps an existing `ended_at`.
+pub const MARK_COMPROMISED: &str = r#"
+    UPDATE sessions
+    SET status = 'compromised', end_reason = $2, ended_at = COALESCE(ended_at, now())
+    WHERE id = $1
+"#;
+
 pub const END_ALL_FOR_USER: &str = r#"
     UPDATE sessions
     SET status = $2, end_reason = $3, ended_at = now()

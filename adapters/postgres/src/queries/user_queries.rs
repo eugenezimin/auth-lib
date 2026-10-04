@@ -48,6 +48,7 @@ pub const FIND_USER_WITH_ROLES_BY_ID: &str = r#"
         u.first_name, u.last_name, u.avatar_url,
         u.is_active, u.is_verified, u.created_at, u.updated_at,
         r.id          AS role_id,
+        r.code        AS role_code,
         r.name        AS role_name,
         r.description AS role_description,
         r.created_at  AS role_created_at
@@ -63,6 +64,7 @@ pub const FIND_USER_WITH_ROLES_BY_EMAIL: &str = r#"
         u.first_name, u.last_name, u.avatar_url,
         u.is_active, u.is_verified, u.created_at, u.updated_at,
         r.id          AS role_id,
+        r.code        AS role_code,
         r.name        AS role_name,
         r.description AS role_description,
         r.created_at  AS role_created_at
@@ -78,6 +80,7 @@ pub const FIND_USER_WITH_ROLES_BY_USERNAME: &str = r#"
         u.first_name, u.last_name, u.avatar_url,
         u.is_active, u.is_verified, u.created_at, u.updated_at,
         r.id          AS role_id,
+        r.code        AS role_code,
         r.name        AS role_name,
         r.description AS role_description,
         r.created_at  AS role_created_at

@@ -3,25 +3,31 @@
 //! All queries use `$N` positional parameters — values are never interpolated.
 
 pub const INSERT_ROLE: &str = r#"
-    INSERT INTO roles (name, description)
-    VALUES ($1, $2)
-    RETURNING id, name, description, created_at
+    INSERT INTO roles (code, name, description)
+    VALUES ($1, $2, $3)
+    RETURNING id, code, name, description, created_at
 "#;
 
 pub const FIND_ROLE_BY_ID: &str = r#"
-    SELECT id, name, description, created_at
+    SELECT id, code, name, description, created_at
     FROM roles
     WHERE id = $1
 "#;
 
 pub const FIND_ROLE_BY_NAME: &str = r#"
-    SELECT id, name, description, created_at
+    SELECT id, code, name, description, created_at
     FROM roles
     WHERE name = $1
 "#;
 
+pub const FIND_ROLE_BY_CODE: &str = r#"
+    SELECT id, code, name, description, created_at
+    FROM roles
+    WHERE code = $1
+"#;
+
 pub const LIST_ALL_ROLES: &str = r#"
-    SELECT id, name, description, created_at
+    SELECT id, code, name, description, created_at
     FROM roles
     ORDER BY name ASC
 "#;
