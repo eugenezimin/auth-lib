@@ -27,6 +27,7 @@ impl PgRoleRepository {
 impl RoleRepository for PgRoleRepository {
     async fn create(&self, new_role: &NewRole) -> Result<Role, AuthError> {
         let row: RoleRow = sqlx::query_as(role_queries::INSERT_ROLE)
+            .bind(&new_role.code)
             .bind(&new_role.name)
             .bind(&new_role.description)
             .fetch_one(&self.pool)
@@ -47,6 +48,15 @@ impl RoleRepository for PgRoleRepository {
     async fn find_by_name(&self, name: &str) -> Result<Option<Role>, AuthError> {
         let row: Option<RoleRow> = sqlx::query_as(role_queries::FIND_ROLE_BY_NAME)
             .bind(name)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(map_sqlx_error)?;
+        Ok(row.map(Into::into))
+    }
+
+    async fn find_by_code(&self, code: &str) -> Result<Option<Role>, AuthError> {
+        let row: Option<RoleRow> = sqlx::query_as(role_queries::FIND_ROLE_BY_CODE)
+            .bind(code)
             .fetch_optional(&self.pool)
             .await
             .map_err(map_sqlx_error)?;

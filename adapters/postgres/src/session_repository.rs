@@ -183,6 +183,20 @@ impl SessionRepository for PgSessionRepository {
         Ok(result.rows_affected() > 0)
     }
 
+    async fn mark_compromised(
+        &self,
+        session_id: Uuid,
+        reason: RevocationReason,
+    ) -> Result<bool, AuthError> {
+        let result = sqlx::query(session_queries::MARK_COMPROMISED)
+            .bind(session_id)
+            .bind(PgRevocationReason::from(reason))
+            .execute(&self.pool)
+            .await
+            .map_err(map_sqlx_error)?;
+        Ok(result.rows_affected() > 0)
+    }
+
     async fn end_all_for_user(
         &self,
         user_id: Uuid,

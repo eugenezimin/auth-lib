@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use auth_lib::AuthError;
 use auth_lib::token::{NewRevocation, Revocation, RevocationRepository, RevocationScope};
 use sqlx::PgPool;
+use uuid::Uuid;
 
 use crate::enums::{PgRevocationReason, PgRevocationScope};
 use crate::errors::map_sqlx_error;
@@ -34,11 +35,22 @@ impl RevocationRepository for PgRevocationRepository {
             .bind(scope)
             .bind(subject)
             .bind(PgRevocationReason::from(revocation.reason))
+            .bind(revocation.origin_node)
             .bind(revocation.ttl)
             .fetch_one(&self.pool)
             .await
             .map_err(map_sqlx_error)?;
         Ok(row.into())
+    }
+
+    async fn mark_enforced(&self, id: Uuid, by: Uuid) -> Result<Option<Revocation>, AuthError> {
+        let row: Option<RevocationRow> = sqlx::query_as(revocation_queries::MARK_ENFORCED)
+            .bind(id)
+            .bind(by)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(map_sqlx_error)?;
+        Ok(row.map(Into::into))
     }
 
     async fn list_active(&self) -> Result<Vec<Revocation>, AuthError> {
