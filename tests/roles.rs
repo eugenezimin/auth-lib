@@ -1,312 +1,109 @@
-/// Integration tests — role repository
-///
-/// These tests talk to a real PostgreSQL database.
-/// Set the same env-vars (or `.env`) used by the application:
-///
-///   DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
-///
-/// Run with:
-///   cargo test --test role_user -- --test-threads=1
-/// or:
-///   cargo test --test role_user
-mod helpers;
+//! Role management — against in-memory adapters.
+// The facade's defaults need the `argon2` and `crypto` features.
+#![cfg(all(feature = "argon2", feature = "crypto"))]
 
-use auth_lib::model::role::NewRole;
+mod support;
 
-use crate::helpers::{cleanup_role_by_name, make_service, unique_name};
+use auth_lib::prelude::*;
 
-// ── Shared helpers ────────────────────────────────────────────────────────────
-
-fn new_role(name: &str) -> NewRole {
-    NewRole {
-        name: name.to_string(),
-        description: Some(format!("Description for {name}")),
-    }
-}
-
-// ── Happy-path tests ──────────────────────────────────────────────────────────
+use crate::support::{make_auth, new_role};
 
 #[tokio::test]
 async fn test_create_role_success() {
-    let service = make_service().await;
-    let name = unique_name("admin");
+    let auth = make_auth();
+    let role = auth.roles().create(&new_role("admin")).await.unwrap();
 
-    let role = service
-        .create_role(&new_role(&name))
-        .await
-        .expect("create should succeed");
-
-    assert!(!role.id.to_string().is_empty());
-    assert_eq!(role.name, name);
-    assert_eq!(
-        role.description.as_deref(),
-        Some(format!("Description for {name}").as_str())
-    );
-
-    cleanup_role_by_name(&service, &name)
-        .await
-        .expect("cleanup failed");
+    assert_eq!(role.name, "admin");
+    assert_eq!(role.description.as_deref(), Some("Description for admin"));
 }
 
 #[tokio::test]
 async fn test_create_role_no_description() {
-    let service = make_service().await;
-    let name = unique_name("guest");
-
-    let role = service
-        .create_role(&NewRole {
-            name: name.clone(),
+    let auth = make_auth();
+    let role = auth
+        .roles()
+        .create(&NewRole {
+            code: "guest".into(),
+            name: "guest".into(),
             description: None,
         })
         .await
-        .expect("create with no description should succeed");
-
-    assert_eq!(role.name, name);
+        .unwrap();
     assert!(role.description.is_none());
-
-    cleanup_role_by_name(&service, &name)
-        .await
-        .expect("cleanup failed");
 }
 
 #[tokio::test]
-async fn test_find_by_id_returns_role() {
-    let service = make_service().await;
-    let name = unique_name("moderator");
+async fn test_find_by_id_and_name() {
+    let auth = make_auth();
+    let created = auth.roles().create(&new_role("moderator")).await.unwrap();
 
-    let created = service
-        .create_role(&new_role(&name))
-        .await
-        .expect("create failed");
-    let found = service
-        .find_role_by_id(created.id)
-        .await
-        .expect("find_by_id failed")
-        .expect("role should exist");
-
-    assert_eq!(found.id, created.id);
-    assert_eq!(found.name, name);
-
-    cleanup_role_by_name(&service, &name)
-        .await
-        .expect("cleanup failed");
+    let by_id = auth.roles().find_by_id(created.id).await.unwrap();
+    let by_name = auth.roles().find_by_name("moderator").await.unwrap();
+    assert_eq!(by_id.as_ref(), Some(&created));
+    assert_eq!(by_name.as_ref(), Some(&created));
 }
 
 #[tokio::test]
-async fn test_find_by_id_returns_none_for_missing() {
-    let service = make_service().await;
-
-    let result = service
-        .find_role_by_id(uuid::Uuid::new_v4())
-        .await
-        .expect("find_by_id should not error on a missing UUID");
-
-    assert!(result.is_none());
-}
-
-#[tokio::test]
-async fn test_find_by_name_returns_role() {
-    let service = make_service().await;
-    let name = unique_name("editor");
-
-    service
-        .create_role(&new_role(&name))
-        .await
-        .expect("create failed");
-
-    let found = service
-        .find_role_by_name(&name)
-        .await
-        .expect("find_by_name failed")
-        .expect("role should exist");
-
-    assert_eq!(found.name, name);
-
-    cleanup_role_by_name(&service, &name)
-        .await
-        .expect("cleanup failed");
-}
-
-#[tokio::test]
-async fn test_find_by_name_returns_none_for_missing() {
-    let service = make_service().await;
-
-    let result = service
-        .find_role_by_name(&unique_name("nonexistent"))
-        .await
-        .expect("find_by_name should not error on a missing name");
-
-    assert!(result.is_none());
-}
-
-#[tokio::test]
-async fn test_list_all_includes_created_roles() {
-    let service = make_service().await;
-    let alpha = unique_name("list_alpha");
-    let beta = unique_name("list_beta");
-
-    service
-        .create_role(&new_role(&alpha))
-        .await
-        .expect("create alpha failed");
-    service
-        .create_role(&new_role(&beta))
-        .await
-        .expect("create beta failed");
-
-    let all = service.list_roles().await.expect("list_all failed");
-    let names: Vec<&str> = all.iter().map(|r| r.name.as_str()).collect();
-
-    assert!(names.contains(&alpha.as_str()), "alpha should be in list");
-    assert!(names.contains(&beta.as_str()), "beta should be in list");
-
-    // Both names share the same base prefix so their UUID suffixes determine
-    // sort order — we can't assert relative position, only presence.
-    cleanup_role_by_name(&service, &alpha)
-        .await
-        .expect("cleanup alpha failed");
-    cleanup_role_by_name(&service, &beta)
-        .await
-        .expect("cleanup beta failed");
-}
-
-#[tokio::test]
-async fn test_delete_role_returns_true() {
-    let service = make_service().await;
-    let name = unique_name("to_delete");
-
-    let created = service
-        .create_role(&new_role(&name))
-        .await
-        .expect("create failed");
-    let deleted = service
-        .delete_role(created.id)
-        .await
-        .expect("delete failed");
-
+async fn test_find_missing_returns_none() {
+    let auth = make_auth();
     assert!(
-        deleted.is_some(),
-        "delete should return Some(id) when a row was deleted"
+        auth.roles()
+            .find_by_id(uuid::Uuid::new_v4())
+            .await
+            .unwrap()
+            .is_none()
     );
-
-    let after = service
-        .find_role_by_id(created.id)
-        .await
-        .expect("find_by_id failed");
-    assert!(after.is_none(), "role should not exist after deletion");
+    assert!(auth.roles().find_by_name("nope").await.unwrap().is_none());
 }
 
 #[tokio::test]
-async fn test_delete_missing_role_returns_false() {
-    let service = make_service().await;
+async fn test_list_is_sorted_by_name() {
+    let auth = make_auth();
+    auth.roles().create(&new_role("beta")).await.unwrap();
+    auth.roles().create(&new_role("alpha")).await.unwrap();
 
-    let deleted = service
-        .delete_role(uuid::Uuid::new_v4())
+    let names: Vec<String> = auth
+        .roles()
+        .list()
         .await
-        .expect("delete on missing UUID should not error");
-
-    assert!(
-        deleted.is_none(),
-        "delete should return None when no row was found"
-    );
+        .unwrap()
+        .into_iter()
+        .map(|r| r.name)
+        .collect();
+    assert_eq!(names, ["alpha", "beta"]);
 }
 
 #[tokio::test]
-async fn test_exists_by_name_true_after_create() {
-    let service = make_service().await;
-    let name = unique_name("exists_check");
+async fn test_delete_role() {
+    let auth = make_auth();
+    let role = auth.roles().create(&new_role("to_delete")).await.unwrap();
 
-    service
-        .create_role(&new_role(&name))
-        .await
-        .expect("create failed");
-
-    let exists = service
-        .exists_role_by_name(&name)
-        .await
-        .expect("exists_role_by_name failed");
-    assert!(exists);
-
-    cleanup_role_by_name(&service, &name)
-        .await
-        .expect("cleanup failed");
+    assert_eq!(auth.roles().delete(role.id).await.unwrap(), Some(role.id));
+    assert!(auth.roles().find_by_id(role.id).await.unwrap().is_none());
+    assert_eq!(auth.roles().delete(role.id).await.unwrap(), None);
 }
 
 #[tokio::test]
-async fn test_exists_by_name_false_for_missing() {
-    let service = make_service().await;
-
-    let exists = service
-        .exists_role_by_name(&unique_name("absent"))
+async fn test_exists_by_name() {
+    let auth = make_auth();
+    auth.roles()
+        .create(&new_role("exists_check"))
         .await
-        .expect("exists_role_by_name should not error");
+        .unwrap();
 
-    assert!(!exists);
+    assert!(auth.roles().exists_by_name("exists_check").await.unwrap());
+    assert!(!auth.roles().exists_by_name("absent").await.unwrap());
 }
 
 #[tokio::test]
 async fn test_create_duplicate_name_fails() {
-    let service = make_service().await;
-    let name = unique_name("unique_role");
+    let auth = make_auth();
+    auth.roles().create(&new_role("unique_role")).await.unwrap();
 
-    service
-        .create_role(&new_role(&name))
+    let err = auth
+        .roles()
+        .create(&new_role("unique_role"))
         .await
-        .expect("First create should succeed");
-
-    let err = service
-        .create_role(&new_role(&name))
-        .await
-        .expect_err("Second create with the same name must fail");
-
-    let msg = err.to_string().to_lowercase();
-    assert!(
-        msg.contains("unique")
-            || msg.contains("duplicate")
-            || msg.contains("already exists")
-            || msg.contains("roles_name_key"),
-        "Expected a uniqueness violation, got: {err:?}"
-    );
-
-    cleanup_role_by_name(&service, &name)
-        .await
-        .expect("cleanup failed");
-}
-
-#[tokio::test]
-async fn test_db_unique_index_rejects_duplicate_name() {
-    let service = make_service().await;
-    let name = unique_name("idx_role");
-
-    let first = NewRole {
-        name: name.clone(),
-        description: None,
-    };
-    let second = NewRole {
-        name: name.clone(),
-        description: Some("duplicate attempt".into()),
-    };
-
-    service
-        .create_role(&first)
-        .await
-        .expect("First insert should succeed");
-
-    let err = service
-        .create_role(&second)
-        .await
-        .expect_err("Second insert with the same name must fail at DB level");
-
-    let msg = err.to_string().to_lowercase();
-    assert!(
-        msg.contains("unique")
-            || msg.contains("duplicate")
-            || msg.contains("already exists")
-            || msg.contains("roles_name_key"),
-        "Expected a DB uniqueness violation, got: {err:?}"
-    );
-
-    cleanup_role_by_name(&service, &name)
-        .await
-        .expect("cleanup failed");
+        .expect_err("duplicate name must fail");
+    assert!(matches!(err, AuthError::RoleAlreadyExists), "got: {err:?}");
 }
