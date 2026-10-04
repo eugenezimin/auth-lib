@@ -24,8 +24,7 @@ use auth_lib::{
     user::{RegisterUser, User},
 };
 use auth_lib_postgres::{
-    PgConfig, PgRevocationRepository, PgRoleRepository, PgSessionRepository, PgUserRepository,
-    PgUserRoleRepository, build_pg_pool, run_migrations,
+    PgConfig, PgPermissionRepository, build_pg_pool, repositories, run_migrations,
 };
 
 // ── Config ────────────────────────────────────────────────────────────────────
@@ -56,24 +55,34 @@ pub async fn pool() -> sqlx::PgPool {
     pool
 }
 
+/// A service in the default authorization mode (`rbac`).
 pub async fn make_service() -> AuthLib {
+    make_service_in("rbac").await
+}
+
+/// A service in the given authorization mode (`none` | `rbac` |
+/// `permissions` | `combined`).
+pub async fn make_service_in(authz_mode: &str) -> AuthLib {
     let pool = pool().await;
     let keys = generate_signing_key().expect("key generation");
     let config = RawConfig::default()
         .jwt_signing_key(keys.signing_key)
         .jwt_issuer("auth-lib-test")
         .refresh_secret(generate_refresh_secret().expect("secret generation"))
+        .authz_mode(authz_mode)
         .build()
         .expect("Failed to build test config");
 
-    AuthLib::builder(config)
-        .users(Arc::new(PgUserRepository::new(pool.clone())))
-        .roles(Arc::new(PgRoleRepository::new(pool.clone())))
-        .user_roles(Arc::new(PgUserRoleRepository::new(pool.clone())))
-        .sessions(Arc::new(PgSessionRepository::new(pool.clone())))
-        .revocations(Arc::new(PgRevocationRepository::new(pool)))
+    AuthLib::builder(config, repositories(&pool))
+        .permissions(Arc::new(PgPermissionRepository::new(pool)))
         .build()
         .expect("Failed to build auth service")
+}
+
+/// A valid role / permission code derived from a (unique) name.
+pub fn code_of(name: &str) -> String {
+    name.to_lowercase()
+        .replace(|c: char| !c.is_ascii_alphanumeric(), "_")
 }
 
 // ── Unique name generator ─────────────────────────────────────────────────────

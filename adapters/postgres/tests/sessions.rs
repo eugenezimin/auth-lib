@@ -378,6 +378,7 @@ async fn test_every_revocation_reason_round_trips_through_the_enum() {
         RevocationReason::PasswordChanged,
         RevocationReason::AccountDisabled,
         RevocationReason::AccountDeleted,
+        RevocationReason::RevokedTokenUsed,
     ];
     let ttl = Duration::from_secs(60);
 
@@ -389,7 +390,12 @@ async fn test_every_revocation_reason_round_trips_through_the_enum() {
             RevocationScope::User(subject)
         };
         let stored = repo
-            .insert(&NewRevocation { scope, reason, ttl })
+            .insert(&NewRevocation {
+                scope,
+                reason,
+                ttl,
+                origin_node: Uuid::new_v4(),
+            })
             .await
             .unwrap();
         assert_eq!(stored.scope, scope);

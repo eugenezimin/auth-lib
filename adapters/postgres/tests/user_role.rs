@@ -22,8 +22,8 @@ mod helpers;
 use auth_lib::{access::NewRole, user::RegisterUser};
 
 use crate::helpers::{
-    cleanup_role_by_id, cleanup_user_by_id, create_test_role, create_test_user, make_service,
-    unique_email, unique_name,
+    cleanup_role_by_id, cleanup_user_by_id, code_of, create_test_role, create_test_user,
+    make_service, unique_email, unique_name,
 };
 
 fn test_user_request() -> RegisterUser {
@@ -37,8 +37,10 @@ fn test_user_request() -> RegisterUser {
 }
 
 fn test_role() -> NewRole {
+    let name = unique_name("test_role");
     NewRole {
-        name: unique_name("test_role"),
+        code: code_of(&name),
+        name,
         description: Some("Created by test helper".into()),
     }
 }

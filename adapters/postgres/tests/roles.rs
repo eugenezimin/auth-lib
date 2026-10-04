@@ -14,12 +14,13 @@ mod helpers;
 
 use auth_lib::access::NewRole;
 
-use crate::helpers::{cleanup_role_by_name, make_service, unique_name};
+use crate::helpers::{cleanup_role_by_name, code_of, make_service, unique_name};
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
 fn new_role(name: &str) -> NewRole {
     NewRole {
+        code: code_of(name),
         name: name.to_string(),
         description: Some(format!("Description for {name}")),
     }
@@ -58,6 +59,7 @@ async fn test_create_role_no_description() {
     let role = service
         .roles()
         .create(&NewRole {
+            code: code_of(&name),
             name: name.clone(),
             description: None,
         })
@@ -299,10 +301,12 @@ async fn test_db_unique_index_rejects_duplicate_name() {
     let name = unique_name("idx_role");
 
     let first = NewRole {
+        code: code_of(&name),
         name: name.clone(),
         description: None,
     };
     let second = NewRole {
+        code: code_of(&name),
         name: name.clone(),
         description: Some("duplicate attempt".into()),
     };
