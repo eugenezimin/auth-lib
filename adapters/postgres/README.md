@@ -11,6 +11,9 @@ either uses this adapter or writes its own against the same traits.
 | `UserRoleRepository`     | `PgUserRoleRepository`      | implemented |
 | `SessionRepository`      | `PgSessionRepository`       | implemented |
 | `RevocationRepository`   | `PgRevocationRepository`    | implemented |
+| `PermissionRepository`   | `PgPermissionRepository`    | implemented |
+| `KeyRepository`          | `PgKeyRepository`           | implemented |
+| `NodeRepository`         | `PgNodeRepository`          | implemented |
 
 ---
 
@@ -23,16 +26,15 @@ use auth_lib_postgres::*;
 
 let pool = build_pg_pool(&PgConfig::from_env()?).await?;
 run_migrations(&pool).await?;   // apply any pending schema migrations
-let auth = AuthLib::builder(EnvLoader.load_config()?)
-    .users(Arc::new(PgUserRepository::new(pool.clone())))
-    .roles(Arc::new(PgRoleRepository::new(pool.clone())))
-    .user_roles(Arc::new(PgUserRoleRepository::new(pool.clone())))
-    .sessions(Arc::new(PgSessionRepository::new(pool.clone())))
-    .revocations(Arc::new(PgRevocationRepository::new(pool)))
+// `repositories(&pool)` supplies every required repository (users, roles,
+// user_roles, sessions, revocations, keys); a missing one is a compile error.
+let auth = AuthLib::builder(EnvLoader.load_config()?, repositories(&pool))
+    .permissions(Arc::new(PgPermissionRepository::new(pool.clone()))) // AUTH_AUTHZ_MODE=permissions|combined
+    .cluster(transport, Arc::new(PgNodeRepository::new(pool)))        // optional, see docs/cluster.md
     .build()?;
 
-// Load the persisted denylist at startup, then keep it in sync.
-auth.denylist_sync().sync().await?;
+// Load revocations / keys / catalog and join the cluster; then tick every heartbeat.
+auth.start().await?;
 ```
 
 ## Schema conventions
@@ -48,10 +50,14 @@ auth.denylist_sync().sync().await?;
 
 | Table                 | Purpose |
 |-----------------------|---------|
-| `users`, `roles`, `users_roles` | Identity and RBAC |
+| `users`, `roles`, `users_roles` | Identity and RBAC. `roles.code` is the immutable identifier carried in tokens (`rol`) |
+| `permissions`, `permission_options` | The application's permission catalog (`bool`, `single`, `multi`, `text`). Every `bool`/`text` permission and every option takes a permanent **position** from `permission_position_seq`; tokens encode grants by position (see [`docs/authorization.md`](../../docs/authorization.md)) |
+| `user_permission_grants`, `role_permission_grants` | Granted values: one row per `bool`/`text` grant or per chosen option. Read only at login / refresh |
 | `sessions`            | One row per login on one device: status (`active`, `revoked` or `compromised`), creating IP, user agent, current generation, idle and absolute expiry, and a per-session secret. **No tokens are stored.** |
 | `session_generations` | Rotation history (newest N per session, default 10): issuing IP, `issued_at`, `superseded_at`. The row's `id` is the access token's `jti`. |
-| `revocations`         | Append-only persisted denylist (`session` or `user` scope). Rows only live for the access TTL plus leeway. |
+| `revocations`         | Persisted denylist (`session` or `user` scope), `pending` → `enforced` once a covered token is used. Rows only live for the access TTL plus leeway. |
+| `cluster_nodes`       | Registry of auth-lib instances as a state machine: lifecycle `state` (`joining` → `active` → `leaving`) and `heartbeat` (`online` / `offline`; deleted when still silent). Written only on state changes; read once at startup ([`docs/cluster.md`](../../docs/cluster.md)) |
+| `verifying_keys`      | Public Ed25519 keys published by instances; `revoked` keys are rejected everywhere |
 
 Refresh rotation is a compare-and-swap on `sessions.current_generation`, done
 inside a transaction. When refreshes race, one wins and the others get a
@@ -72,6 +78,13 @@ erDiagram
     roles ||--o{ users_roles : "is granted via"
     users ||--o{ sessions : "logs in as"
     sessions ||--|{ session_generations : "rotates through"
+    permissions ||--o{ permission_options : "offers"
+    users ||--o{ user_permission_grants : "is granted"
+    roles ||--o{ role_permission_grants : "grants"
+    permissions ||--o{ user_permission_grants : "of"
+    permissions ||--o{ role_permission_grants : "of"
+    permission_options |o--o{ user_permission_grants : "chosen"
+    permission_options |o--o{ role_permission_grants : "chosen"
     sessions |o..o{ revocations : "subject (scope = session)"
     users |o..o{ revocations : "subject (scope = user)"
 
@@ -91,6 +104,7 @@ erDiagram
 
     roles {
         uuid id PK "gen_random_uuid()"
+        varchar(64) code UK "immutable, in tokens (rol)"
         varchar(50) name UK
         text description
         timestamptz created_at "now()"
@@ -140,6 +154,42 @@ erDiagram
         timestamptz expires_at "now() + access TTL + leeway"
         timestamptz created_at "now()"
     }
+
+    permissions {
+        uuid id PK "gen_random_uuid()"
+        varchar(64) code UK
+        permission_kind kind "bool | single | multi | text"
+        text description
+        integer position UK "bool / text only; permanent"
+        integer max_length "text only"
+        timestamptz created_at "now()"
+    }
+
+    permission_options {
+        uuid id PK "gen_random_uuid()"
+        uuid permission_id FK
+        varchar(64) code "unique per permission"
+        integer position UK "permanent"
+        timestamptz created_at "now()"
+    }
+
+    user_permission_grants {
+        uuid id PK "gen_random_uuid()"
+        uuid user_id FK
+        uuid permission_id FK
+        uuid option_id FK "single / multi"
+        text text_value "text"
+        timestamptz created_at "now()"
+    }
+
+    role_permission_grants {
+        uuid id PK "gen_random_uuid()"
+        uuid role_id FK
+        uuid permission_id FK
+        uuid option_id FK "single / multi"
+        text text_value "text"
+        timestamptz created_at "now()"
+    }
 ```
 
 ### Constraints and indexes
@@ -147,7 +197,11 @@ erDiagram
 | Table                 | Constraint / index | Purpose |
 |-----------------------|--------------------|---------|
 | `users`               | `users_email`, `users_username_key` (unique on `lower(...)`) | One account per email and per username, case-insensitively |
-| `roles`               | `roles_name_key` (unique) | Role names are unique |
+| `roles`               | `roles_name_key`, `roles_code_key` (unique), `chk_roles_code_format` | Unique names; unique, well-formed codes |
+| `permissions`         | `permissions_code_key`, `permissions_position_key` (unique) | One entry per code; positions never collide |
+| `permissions`         | `chk_permissions_position`, `chk_permissions_max_length` | Position exactly for `bool`/`text`; `max_length` exactly for `text` |
+| `permission_options`  | `permission_options_permission_code_key`, `permission_options_position_key` (unique) | Option codes unique per permission; positions never collide |
+| `*_permission_grants` | `*_value_key` (partial: `option_id IS NULL`), `*_option_key` (partial: `option_id IS NOT NULL`) | One `bool`/`text` row per owner and permission; one row per chosen option |
 | `users_roles`         | `unique_user_role_active` (unique, partial: `revoked_at IS NULL`) | A user holds a role at most once at a time, while old revoked assignments stay as an audit trail |
 | `users_roles`         | `chk_users_roles_revoked_after_assigned` | `revoked_at` can't precede `assigned_at` |
 | `users_roles`         | `idx_users_roles_active`, `idx_users_roles_removed` (partial) | Fast lookup of a user's active and revoked assignments |
@@ -159,6 +213,7 @@ erDiagram
 | `session_generations` | `session_generations_session_generation_key` (unique `(session_id, generation)`) | One row per rotation. Rows older than the newest N are trimmed on each refresh |
 | `session_generations` | `chk_session_generations_positive` | `generation >= 1` |
 | `revocations`         | `idx_revocations_expires_at` | `list_active()` and `purge_expired()` |
+| `*_permission_grants` | `idx_user_permission_grants_user_id`, `idx_role_permission_grants_role_id` | `effective_grants` at login / refresh |
 
 Allowed status, scope and reason values are enforced by the ENUM types, so no CHECKs are needed.
 
@@ -192,6 +247,7 @@ Rules:
 
 - **Never edit a migration that has been applied anywhere.** The checksum check will refuse to run.
 - **To change the schema, add the next file**, e.g. `0002_add_login_attempts.sql`.
+- **Current migrations:** `0001` initial schema · `0002` authorization · `0003` cluster sync · `0004` node state machine.
 - **Adding an ENUM value** is `ALTER TYPE revocation_reason ADD VALUE '...'` in a new migration, plus the matching variant in `src/enums.rs`. Values can't be removed or reordered without recreating the type.
 
 ## setup_db — database setup script

@@ -8,13 +8,18 @@ use std::net::IpAddr;
 use auth_lib::AuthError;
 use auth_lib::access::{Role, UserRole};
 use auth_lib::authentication::{RefreshSnapshot, Session, SessionGeneration};
-use auth_lib::token::{Revocation, RevocationScope};
+use auth_lib::authorization::{Permission, PermissionGrant, PermissionKind, PermissionOption};
+use auth_lib::cluster::{NodeInfo, NodeRecord};
+use auth_lib::token::{Revocation, RevocationScope, VerifyingKeyRecord};
 use auth_lib::user::{User, UserWithRoles};
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use crate::codes::from_db_generation;
-use crate::enums::{PgRevocationReason, PgRevocationScope, PgSessionStatus};
+use crate::enums::{
+    PgHeartbeatStatus, PgKeyStatus, PgNodeState, PgPermissionKind, PgRevocationReason,
+    PgRevocationScope, PgRevocationStatus, PgSessionStatus,
+};
 
 #[derive(sqlx::FromRow)]
 pub(crate) struct UserRow {
@@ -55,6 +60,7 @@ pub(crate) struct UserWithRoleRow {
     #[sqlx(flatten)]
     user: UserRow,
     role_id: Option<Uuid>,
+    role_code: Option<String>,
     role_name: Option<String>,
     role_description: Option<String>,
     role_created_at: Option<DateTime<Utc>>,
@@ -67,11 +73,15 @@ pub(crate) fn fold_user_with_roles(rows: Vec<UserWithRoleRow>) -> Option<UserWit
 
     for row in rows {
         // LEFT JOIN: role columns are NULL when the user has no active roles.
-        if let (Some(id), Some(name), Some(created_at)) =
-            (row.role_id, row.role_name, row.role_created_at)
-        {
+        if let (Some(id), Some(code), Some(name), Some(created_at)) = (
+            row.role_id,
+            row.role_code,
+            row.role_name,
+            row.role_created_at,
+        ) {
             roles.push(Role {
                 id,
+                code,
                 name,
                 description: row.role_description,
                 created_at,
@@ -89,6 +99,7 @@ pub(crate) fn fold_user_with_roles(rows: Vec<UserWithRoleRow>) -> Option<UserWit
 #[derive(sqlx::FromRow)]
 pub(crate) struct RoleRow {
     id: Uuid,
+    code: String,
     name: String,
     description: Option<String>,
     created_at: DateTime<Utc>,
@@ -98,6 +109,7 @@ impl From<RoleRow> for Role {
     fn from(r: RoleRow) -> Self {
         Self {
             id: r.id,
+            code: r.code,
             name: r.name,
             description: r.description,
             created_at: r.created_at,
@@ -272,23 +284,188 @@ impl TryFrom<RefreshRow> for RefreshSnapshot {
 
 #[derive(sqlx::FromRow)]
 pub(crate) struct RevocationRow {
+    id: Uuid,
     scope: PgRevocationScope,
     subject: Uuid,
     reason: PgRevocationReason,
+    status: PgRevocationStatus,
+    origin_node: Option<Uuid>,
     revoked_at: DateTime<Utc>,
     expires_at: DateTime<Utc>,
+    enforced_at: Option<DateTime<Utc>>,
+    enforced_by: Option<Uuid>,
 }
 
 impl From<RevocationRow> for Revocation {
     fn from(r: RevocationRow) -> Self {
         Self {
+            id: r.id,
             scope: match r.scope {
                 PgRevocationScope::Session => RevocationScope::Session(r.subject),
                 PgRevocationScope::User => RevocationScope::User(r.subject),
             },
             reason: r.reason.into(),
+            status: r.status.into(),
+            // Rows written before migration 0003 have no origin.
+            origin_node: r.origin_node.unwrap_or_default(),
             revoked_at: r.revoked_at,
             expires_at: r.expires_at,
+            enforced_at: r.enforced_at,
+            enforced_by: r.enforced_by,
         }
+    }
+}
+
+// ── Cluster ───────────────────────────────────────────────────────────────────
+
+#[derive(sqlx::FromRow)]
+pub(crate) struct NodeRow {
+    id: Uuid,
+    service: String,
+    ip: Option<IpAddr>,
+    dns_name: Option<String>,
+    port: i32,
+    version: String,
+    state: PgNodeState,
+    heartbeat: PgHeartbeatStatus,
+    started_at: DateTime<Utc>,
+    state_changed_at: DateTime<Utc>,
+    heartbeat_changed_at: DateTime<Utc>,
+}
+
+impl TryFrom<NodeRow> for NodeRecord {
+    type Error = AuthError;
+
+    fn try_from(r: NodeRow) -> Result<Self, AuthError> {
+        Ok(Self {
+            info: NodeInfo {
+                node_id: r.id,
+                service: r.service,
+                ip: r.ip,
+                dns_name: r.dns_name,
+                port: u16::try_from(r.port)
+                    .map_err(|_| AuthError::Storage("node port out of range".into()))?,
+                version: r.version,
+                started_at: r.started_at,
+            },
+            state: r.state.into(),
+            heartbeat: r.heartbeat.into(),
+            state_changed_at: r.state_changed_at,
+            heartbeat_changed_at: r.heartbeat_changed_at,
+        })
+    }
+}
+
+#[derive(sqlx::FromRow)]
+pub(crate) struct KeyRow {
+    kid: String,
+    public_key: Vec<u8>,
+    status: PgKeyStatus,
+    published_by: Option<Uuid>,
+    created_at: DateTime<Utc>,
+    revoked_at: Option<DateTime<Utc>>,
+}
+
+impl TryFrom<KeyRow> for VerifyingKeyRecord {
+    type Error = AuthError;
+
+    fn try_from(r: KeyRow) -> Result<Self, AuthError> {
+        Ok(Self {
+            kid: r.kid,
+            public_key: r
+                .public_key
+                .try_into()
+                .map_err(|_| AuthError::Storage("verifying key is not 32 bytes".into()))?,
+            status: r.status.into(),
+            published_by: r.published_by,
+            created_at: r.created_at,
+            revoked_at: r.revoked_at,
+        })
+    }
+}
+
+// ── Permissions ───────────────────────────────────────────────────────────────
+
+#[derive(sqlx::FromRow)]
+pub(crate) struct PermissionRow {
+    id: Uuid,
+    code: String,
+    kind: PgPermissionKind,
+    description: Option<String>,
+    position: Option<i32>,
+    max_length: Option<i32>,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(sqlx::FromRow)]
+pub(crate) struct OptionRow {
+    id: Uuid,
+    permission_id: Uuid,
+    code: String,
+    position: i32,
+}
+
+#[derive(sqlx::FromRow)]
+pub(crate) struct GrantRow {
+    position: i32,
+    text_value: Option<String>,
+}
+
+fn position(p: i32) -> Result<u32, AuthError> {
+    u32::try_from(p).map_err(|_| AuthError::Storage("negative permission position".into()))
+}
+
+impl PermissionRow {
+    pub(crate) fn id(&self) -> Uuid {
+        self.id
+    }
+
+    /// Combine with its options (any order) into a domain [`Permission`].
+    pub(crate) fn assemble(self, options: &[OptionRow]) -> Result<Permission, AuthError> {
+        let kind = match self.kind {
+            PgPermissionKind::Bool => PermissionKind::Bool,
+            PgPermissionKind::Single => PermissionKind::Single,
+            PgPermissionKind::Multi => PermissionKind::Multi,
+            PgPermissionKind::Text => PermissionKind::Text {
+                max_length: self
+                    .max_length
+                    .and_then(|m| u32::try_from(m).ok())
+                    .ok_or_else(|| {
+                        AuthError::Storage("text permission without max_length".into())
+                    })?,
+            },
+        };
+        let mut opts = options
+            .iter()
+            .filter(|o| o.permission_id == self.id)
+            .map(|o| {
+                Ok(PermissionOption {
+                    id: o.id,
+                    code: o.code.clone(),
+                    position: position(o.position)?,
+                })
+            })
+            .collect::<Result<Vec<_>, AuthError>>()?;
+        opts.sort_by_key(|o| o.position);
+        Ok(Permission {
+            id: self.id,
+            code: self.code,
+            kind,
+            description: self.description,
+            position: self.position.map(position).transpose()?,
+            options: opts,
+            created_at: self.created_at,
+        })
+    }
+}
+
+impl TryFrom<GrantRow> for PermissionGrant {
+    type Error = AuthError;
+
+    fn try_from(r: GrantRow) -> Result<Self, AuthError> {
+        Ok(Self {
+            position: position(r.position)?,
+            text: r.text_value,
+        })
     }
 }
