@@ -12,22 +12,21 @@
 //!
 //! let pool = build_pg_pool(&PgConfig::from_env()?).await?;
 //! run_migrations(&pool).await?;       // apply pending schema migrations
-//! let auth = AuthLib::builder(EnvLoader.load_config()?)
-//!     .users(Arc::new(PgUserRepository::new(pool.clone())))
-//!     .roles(Arc::new(PgRoleRepository::new(pool.clone())))
-//!     .user_roles(Arc::new(PgUserRoleRepository::new(pool.clone())))
-//!     .sessions(Arc::new(PgSessionRepository::new(pool.clone())))
-//!     .revocations(Arc::new(PgRevocationRepository::new(pool)))
+//! let auth = AuthLib::builder(EnvLoader.load_config()?, repositories(&pool))
+//!     .permissions(Arc::new(PgPermissionRepository::new(pool.clone()))) // permission modes
+//!     .cluster(transport, Arc::new(PgNodeRepository::new(pool)))        // optional
 //!     .build()?;
 //!
-//! auth.denylist_sync().sync().await?; // at startup, then every few seconds
+//! auth.start().await?;   // load state, join the cluster; then auth.tick() every heartbeat
 //! ```
 
+mod cluster_repository;
 mod codes;
 pub mod config;
 pub mod constants;
 mod enums;
 mod errors;
+mod permission_repository;
 pub mod pool;
 mod queries;
 mod revocation_repository;
@@ -37,13 +36,33 @@ mod session_repository;
 mod user_repository;
 mod user_role_repository;
 
+pub use cluster_repository::{PgKeyRepository, PgNodeRepository};
 pub use config::PgConfig;
+pub use permission_repository::PgPermissionRepository;
 pub use pool::build_pg_pool;
 pub use revocation_repository::PgRevocationRepository;
 pub use role_repository::PgRoleRepository;
 pub use session_repository::PgSessionRepository;
 pub use user_repository::PgUserRepository;
 pub use user_role_repository::PgUserRoleRepository;
+
+use std::sync::Arc;
+
+use auth_lib::Repositories;
+
+/// Every repository auth-lib requires, on one pool.  The optional ones —
+/// [`PgPermissionRepository`] (permission modes) and [`PgNodeRepository`]
+/// (cluster) — are passed to the builder separately.
+pub fn repositories(pool: &sqlx::PgPool) -> Repositories {
+    Repositories {
+        users: Arc::new(PgUserRepository::new(pool.clone())),
+        roles: Arc::new(PgRoleRepository::new(pool.clone())),
+        user_roles: Arc::new(PgUserRoleRepository::new(pool.clone())),
+        sessions: Arc::new(PgSessionRepository::new(pool.clone())),
+        revocations: Arc::new(PgRevocationRepository::new(pool.clone())),
+        keys: Arc::new(PgKeyRepository::new(pool.clone())),
+    }
+}
 
 /// Versioned schema migrations (`migrations/NNNN_*.sql`), embedded at
 /// compile time.  Applied migrations are recorded, with checksums, in the

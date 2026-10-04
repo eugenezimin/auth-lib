@@ -30,4 +30,6 @@ pub const PG_UNIQUE_VIOLATION: &str = "23505";
 pub const CONSTRAINT_USERS_EMAIL: &str = "users_email";
 pub const CONSTRAINT_USERS_USERNAME: &str = "users_username_key";
 pub const CONSTRAINT_ROLES_NAME: &str = "roles_name_key";
+pub const CONSTRAINT_ROLES_CODE: &str = "roles_code_key";
+pub const CONSTRAINT_PERMISSIONS_CODE: &str = "permissions_code_key";
 pub const CONSTRAINT_USER_ROLE_ACTIVE: &str = "unique_user_role_active";

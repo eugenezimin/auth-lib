@@ -16,7 +16,8 @@ pub(crate) fn map_sqlx_error(e: sqlx::Error) -> AuthError {
         match db_err.constraint().unwrap_or("") {
             CONSTRAINT_USERS_EMAIL => return AuthError::EmailAlreadyTaken,
             CONSTRAINT_USERS_USERNAME => return AuthError::UsernameAlreadyTaken,
-            CONSTRAINT_ROLES_NAME => return AuthError::RoleAlreadyExists,
+            CONSTRAINT_ROLES_NAME | CONSTRAINT_ROLES_CODE => return AuthError::RoleAlreadyExists,
+            CONSTRAINT_PERMISSIONS_CODE => return AuthError::PermissionAlreadyExists,
             CONSTRAINT_USER_ROLE_ACTIVE => return AuthError::RoleAlreadyAssigned,
             _ => {}
         }
