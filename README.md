@@ -1,8 +1,8 @@
 # z-auth
 
-[![CI](https://github.com/eugenezimin/auth-lib/actions/workflows/ci.yml/badge.svg?event=pull_request)](https://github.com/eugenezimin/auth-lib/actions/workflows/ci.yml)
-[![Release](https://github.com/eugenezimin/auth-lib/actions/workflows/release.yml/badge.svg)](https://github.com/eugenezimin/auth-lib/actions/workflows/release.yml)
-[![Latest release](https://img.shields.io/github/v/release/eugenezimin/auth-lib?include_prereleases&sort=semver)](https://github.com/eugenezimin/auth-lib/releases/latest)
+[![CI](https://github.com/eugenezimin/z-auth/actions/workflows/ci.yml/badge.svg?event=pull_request)](https://github.com/eugenezimin/z-auth/actions/workflows/ci.yml)
+[![Release](https://github.com/eugenezimin/z-auth/actions/workflows/release.yml/badge.svg)](https://github.com/eugenezimin/z-auth/actions/workflows/release.yml)
+[![Latest release](https://img.shields.io/github/v/release/eugenezimin/z-auth?include_prereleases&sort=semver)](https://github.com/eugenezimin/z-auth/releases/latest)
 
 A storage- and transport-agnostic authentication library for Rust.
 
@@ -31,4 +31,4 @@ See the crate-level documentation (`cargo doc --open`) for the module layout and
 ## CI and releases
 
 - Every pull request to `main` runs format, clippy, tests (including the PostgreSQL adapter against a PostgreSQL 16 service), feature-combination builds, docs and a security audit.
-- Pushing a `v*` tag that matches the crate version (e.g. `v0.2.0`) builds release binaries (`setup_db`, `keygen`) for Linux x86_64 and macOS arm64 and publishes them, with SHA-256 checksums, on [GitHub Releases](https://github.com/eugenezimin/auth-lib/releases).
+- Pushing a `v*` tag that matches the crate version (e.g. `v0.2.0`) builds release binaries (`setup_db`, `keygen`) for Linux x86_64 and macOS arm64 and publishes them, with SHA-256 checksums, on [GitHub Releases](https://github.com/eugenezimin/z-auth/releases).
