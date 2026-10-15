@@ -1,0 +1,452 @@
+//! Database setup script for the auth service.
+//!
+//! Run with:  cargo run -p z-auth-postgres --bin setup_db [-- --reset]
+//! Cluster:   cargo run -p z-auth-postgres --features shared --bin setup_db -- --cluster
+//!
+//! Reads connection details from the environment (a `.env` file in the
+//! current directory is loaded first, if present).  Expected variables:
+//!   DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME (optional – defaults to "auth")
+//!
+//! 1. Creates the database if it does not exist.
+//! 2. Replaces a *legacy* schema (tables created before versioned
+//!    migrations, i.e. without `_sqlx_migrations`) — asking first if any
+//!    table holds data.  `--reset` does the same for any schema (dev only).
+//! 3. Applies pending migrations from `adapters/postgres/migrations`, which
+//!    are embedded at compile time, so the binary runs from any directory.
+//!    With `--cluster` (feature `shared`) it then applies z-auth-cluster's
+//!    set from `migrations_cluster` (versions from 1001).
+//!    A database built with the migrations replaced by the current baseline
+//!    (the old 0001–0008) is refused with a hint to rerun with `--reset`.
+
+use std::collections::HashSet;
+use std::io::{self, Write};
+
+#[cfg(feature = "shared")]
+use z_auth_postgres::CLUSTER_MIGRATOR;
+use z_auth_postgres::{MIGRATOR, PgConfig, constants::ADMIN_DB_NAME, pool::connect_options};
+use sqlx::PgPool;
+use sqlx::migrate::Migrator;
+use sqlx::postgres::PgPoolOptions;
+
+/// Every table z-auth has ever created: the current schema, the names
+/// used before the baseline (old migrations 0001–0008), and `revoked_tokens`
+/// from pre-migration databases.
+const MANAGED_TABLES: &[&str] = &[
+    // current schema
+    "cluster_sync_freshness",
+    "cluster_feed_cursors",
+    "cluster_change_feed",
+    "cluster_sync_site",
+    "cluster_catalog_snapshot",
+    "cluster_account_snapshots",
+    "cluster_nodes",
+    "security_verifying_keys",
+    "security_token_revocations",
+    "security_session_fork_aliases",
+    "security_session_generations",
+    "security_sessions",
+    "security_role_grants",
+    "security_user_grants",
+    "security_permission_options",
+    "security_permissions",
+    "identity_role_assignments",
+    "identity_users",
+    "identity_roles",
+    // before the baseline
+    "sync_freshness",
+    "sync_cursors",
+    "sync_changes",
+    "sync_site",
+    "catalog_snapshot",
+    "account_snapshots",
+    "verifying_keys",
+    "revocations",
+    "session_generation_aliases",
+    "session_generations",
+    "sessions",
+    "role_permission_grants",
+    "user_permission_grants",
+    "permission_options",
+    "permissions",
+    "users_roles",
+    "users",
+    "roles",
+    // pre-migration
+    "revoked_tokens",
+];
+
+/// Enum types created by the migrations (`node_status` only before the
+/// baseline).
+const MANAGED_TYPES: &[&str] = &[
+    "session_status",
+    "revocation_scope",
+    "revocation_reason",
+    "revocation_status",
+    "permission_kind",
+    "node_state",
+    "heartbeat_status",
+    "verifying_key_status",
+    "node_status",
+];
+
+/// Free-standing sequences, current and before the baseline.
+const MANAGED_SEQUENCES: &[&str] = &[
+    "security_permission_position_seq",
+    "cluster_account_snapshot_version_seq",
+    "cluster_change_feed_seq",
+    "permission_position_seq",
+    "account_snapshot_version_seq",
+    "sync_change_seq",
+];
+
+/// Change-feed functions, current and before the baseline.
+const MANAGED_FUNCTIONS: &[&str] = &[
+    "cluster_feed_capture",
+    "cluster_feed_record",
+    "sync_capture",
+    "sync_record_change",
+];
+
+/// sqlx's bookkeeping table.
+const MIGRATIONS_TABLE: &str = "_sqlx_migrations";
+
+/// The cluster set's versions start here (`migrations_cluster/`).
+const CLUSTER_VERSIONS_FROM: i64 = 1000;
+
+// ── Entry point ───────────────────────────────────────────────────────────────
+
+#[tokio::main]
+async fn main() {
+    println!();
+    println!("╔══════════════════════════════════════╗");
+    println!("║      Auth DB – Setup Script          ║");
+    println!("╚══════════════════════════════════════╝");
+    println!();
+
+    // 1. Load .env
+    load_env();
+
+    // 2. Read config
+    let cluster = std::env::args().any(|a| a == "--cluster");
+    #[cfg(not(feature = "shared"))]
+    if cluster {
+        fatal(
+            "--cluster needs the `shared` feature:\n    → cargo run -p z-auth-postgres \
+             --features shared --bin setup_db -- --cluster",
+        );
+    }
+    let cfg = PgConfig::from_env().unwrap_or_else(|e| fatal(&e));
+    let db_name = cfg.name.clone();
+
+    println!("  Host     : {}:{}", cfg.host, cfg.port);
+    println!("  User     : {}", cfg.user);
+    println!("  Database : {}", db_name);
+    println!();
+
+    // 3. Connect to the maintenance database to create our target db
+    let admin_pool = connect(&cfg.connection_url_for(ADMIN_DB_NAME), ADMIN_DB_NAME).await;
+
+    // 4. Ensure the target database exists
+    ensure_database_exists(&admin_pool, &db_name).await;
+    admin_pool.close().await;
+
+    // 5. Connect to the target database
+    let pool = connect(&cfg.connection_url(), &db_name).await;
+
+    // 6. Replace a legacy (pre-migration) schema, or everything on --reset
+    let reset = std::env::args().any(|a| a == "--reset");
+    let tracked = table_exists(&pool, MIGRATIONS_TABLE).await;
+    let legacy = !tracked && any_managed_table_exists(&pool).await;
+    if reset || legacy {
+        if reset {
+            println!("  → --reset: dropping every z-auth table, type and migration record.");
+        } else {
+            println!(
+                "  → Found tables created before versioned migrations; they must be replaced."
+            );
+        }
+        if check_existing_data(&pool).await {
+            confirm_or_exit(&db_name);
+        }
+        drop_schema(&pool).await;
+    } else {
+        println!("  → No legacy schema found.");
+    }
+    println!();
+
+    // 7. Apply pending migrations: core, then (with --cluster) the cluster set
+    check_baseline(&pool).await;
+    apply_migrations(&pool, &MIGRATOR, "core").await;
+    #[cfg(feature = "shared")]
+    if cluster {
+        apply_migrations(&pool, &CLUSTER_MIGRATOR, "cluster").await;
+    }
+
+    println!();
+    println!("✅  Database '{}' is up to date.", db_name);
+    println!();
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+fn load_env() {
+    let path = std::path::Path::new(".env");
+    if !path.exists() {
+        println!("  ℹ️  No .env file found – relying on environment variables.");
+        println!();
+        return;
+    }
+    let content = std::fs::read_to_string(path).expect("Failed to read .env file");
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some((key, value)) = line.split_once('=') {
+            let key = key.trim();
+            let value = value.trim().trim_matches('"').trim_matches('\'');
+            if std::env::var(key).is_err() {
+                unsafe { std::env::set_var(key, value) };
+            }
+        }
+    }
+    println!("  ✓ Loaded .env");
+}
+
+fn fatal(msg: &str) -> ! {
+    eprintln!();
+    eprintln!("❌  {}", msg);
+    eprintln!();
+    std::process::exit(1);
+}
+
+/// Connect to Postgres via a URL; exits with a user-friendly message on failure.
+async fn connect(url: &str, dbname: &str) -> PgPool {
+    let options = connect_options(url).unwrap_or_else(|e| fatal(&format!("Bad DB URL: {e}")));
+    PgPoolOptions::new()
+        .max_connections(1)
+        .connect_with(options)
+        .await
+        .unwrap_or_else(|e| {
+            diagnose_connection_error(&e.to_string(), dbname);
+        })
+}
+
+fn diagnose_connection_error(msg: &str, dbname: &str) -> ! {
+    eprintln!();
+    if msg.contains("Connection refused") || msg.contains("No such file") {
+        eprintln!("❌  Cannot reach PostgreSQL.");
+        eprintln!("    → Make sure PostgreSQL is installed and running.");
+        eprintln!("    → On macOS:  brew services start postgresql");
+        eprintln!("    → On Linux:  sudo systemctl start postgresql");
+    } else if msg.contains("password authentication") || msg.contains("role") {
+        eprintln!("❌  Authentication failed.");
+        eprintln!("    → Check DB_USER and DB_PASSWORD in your .env file.");
+    } else if msg.contains("does not exist") {
+        eprintln!("❌  Could not connect to database '{}'.", dbname);
+    } else {
+        eprintln!("❌  Failed to connect to PostgreSQL: {}", msg);
+    }
+    eprintln!();
+    std::process::exit(1);
+}
+
+async fn ensure_database_exists(admin: &PgPool, db_name: &str) {
+    let exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)")
+            .bind(db_name)
+            .fetch_one(admin)
+            .await
+            .expect("Failed to query pg_database");
+
+    if exists {
+        println!("  ✓ Database '{}' already exists.", db_name);
+    } else {
+        // Database name cannot be parameterised in DDL.
+        let sql = format!("CREATE DATABASE \"{}\"", db_name);
+        sqlx::query(&sql)
+            .execute(admin)
+            .await
+            .unwrap_or_else(|e| fatal(&format!("Failed to create database '{}': {}", db_name, e)));
+        println!("  ✓ Created database '{}'.", db_name);
+    }
+    println!();
+}
+
+/// Returns true if any managed table exists AND contains at least one row.
+async fn check_existing_data(pool: &PgPool) -> bool {
+    for table in MANAGED_TABLES {
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS (
+                SELECT 1 FROM information_schema.tables
+                WHERE table_schema = 'public' AND table_name = $1
+            )",
+        )
+        .bind(table)
+        .fetch_one(pool)
+        .await
+        .expect("Failed to check table existence");
+
+        if !exists {
+            continue;
+        }
+
+        let sql = format!("SELECT EXISTS(SELECT 1 FROM \"public\".\"{table}\" LIMIT 1)");
+        let has_rows: bool = sqlx::query_scalar(&sql)
+            .fetch_one(pool)
+            .await
+            .expect("Failed to query table");
+
+        if has_rows {
+            println!("  ⚠️  Table '{}' contains data.", table);
+            return true;
+        }
+    }
+    false
+}
+
+async fn table_exists(pool: &PgPool, table: &str) -> bool {
+    sqlx::query_scalar(
+        "SELECT EXISTS (
+            SELECT 1 FROM information_schema.tables
+            WHERE table_schema = 'public' AND table_name = $1
+        )",
+    )
+    .bind(table)
+    .fetch_one(pool)
+    .await
+    .expect("Failed to check table existence")
+}
+
+async fn any_managed_table_exists(pool: &PgPool) -> bool {
+    for table in MANAGED_TABLES {
+        if table_exists(pool, table).await {
+            return true;
+        }
+    }
+    false
+}
+
+fn confirm_or_exit(db_name: &str) {
+    println!(
+        "⚠️  Existing tables with data were found in database '{}'.",
+        db_name
+    );
+    print!("   Drop everything and re-create? [y/N]: ");
+    io::stdout().flush().unwrap();
+
+    let mut answer = String::new();
+    io::stdin()
+        .read_line(&mut answer)
+        .expect("Failed to read input");
+
+    if !matches!(answer.trim().to_lowercase().as_str(), "y" | "yes") {
+        println!();
+        println!("  → Aborted. No changes were made.");
+        println!();
+        std::process::exit(0);
+    }
+}
+
+async fn drop_schema(pool: &PgPool) {
+    let tables = MANAGED_TABLES.iter().chain([&MIGRATIONS_TABLE]);
+    let statements = tables
+        .map(|t| format!("DROP TABLE IF EXISTS \"{t}\" CASCADE"))
+        .chain(
+            MANAGED_FUNCTIONS
+                .iter()
+                .map(|f| format!("DROP FUNCTION IF EXISTS \"{f}\" CASCADE")),
+        )
+        .chain(
+            MANAGED_SEQUENCES
+                .iter()
+                .map(|s| format!("DROP SEQUENCE IF EXISTS \"{s}\" CASCADE")),
+        )
+        .chain(
+            MANAGED_TYPES
+                .iter()
+                .map(|t| format!("DROP TYPE IF EXISTS \"{t}\" CASCADE")),
+        );
+    for stmt in statements {
+        print!("  → {stmt}");
+        sqlx::query(&stmt)
+            .execute(pool)
+            .await
+            .unwrap_or_else(|e| fatal(&format!("Failed: {stmt}\nError: {e}")));
+        println!("  ✓");
+    }
+}
+
+/// Every migration this binary knows, from every set compiled in.
+fn known_migrators() -> Vec<&'static Migrator> {
+    #[allow(unused_mut)]
+    let mut sets = vec![&MIGRATOR];
+    #[cfg(feature = "shared")]
+    sets.push(&CLUSTER_MIGRATOR);
+    sets
+}
+
+async fn applied_migrations(pool: &PgPool) -> Vec<(i64, Vec<u8>)> {
+    if table_exists(pool, MIGRATIONS_TABLE).await {
+        sqlx::query_as(&format!("SELECT version, checksum FROM {MIGRATIONS_TABLE}"))
+            .fetch_all(pool)
+            .await
+            .expect("Failed to read applied migrations")
+    } else {
+        Vec::new()
+    }
+}
+
+/// Applied migrations that are unknown or changed mean the database was
+/// built with the migrations the current baseline replaced.  Cluster
+/// versions are only checked when this binary knows the cluster set.
+async fn check_baseline(pool: &PgPool) {
+    let sets = known_migrators();
+    let cluster_known = sets.len() > 1;
+    let replaced = applied_migrations(pool)
+        .await
+        .iter()
+        .filter(|(version, _)| cluster_known || *version < CLUSTER_VERSIONS_FROM)
+        .any(|(version, checksum)| {
+            sets.iter()
+                .flat_map(|set| set.iter())
+                .find(|m| m.version == *version && !m.migration_type.is_down_migration())
+                .is_none_or(|m| m.checksum.as_ref() != checksum.as_slice())
+        });
+    if replaced {
+        fatal(
+            "This database was built with migrations that the current baseline \
+             replaced (the old 0001–0008).\n    → Rebuild it: cargo run -p \
+             z-auth-postgres --bin setup_db -- --reset",
+        );
+    }
+}
+
+async fn apply_migrations(pool: &PgPool, migrator: &Migrator, set: &str) {
+    let applied: HashSet<i64> = applied_migrations(pool)
+        .await
+        .into_iter()
+        .map(|(version, _)| version)
+        .collect();
+    let pending: Vec<_> = migrator
+        .iter()
+        .filter(|m| !m.migration_type.is_down_migration() && !applied.contains(&m.version))
+        .collect();
+
+    if pending.is_empty() {
+        let known = migrator
+            .iter()
+            .filter(|m| applied.contains(&m.version))
+            .count();
+        println!("  ✓ No pending {set} migrations ({known} applied).");
+        return;
+    }
+    for m in &pending {
+        println!("  → Applying {set} {:04} {}", m.version, m.description);
+    }
+    migrator
+        .run(pool)
+        .await
+        .unwrap_or_else(|e| fatal(&format!("Migration failed: {e}")));
+    println!("  ✓ Applied {} {set} migration(s).", pending.len());
+}

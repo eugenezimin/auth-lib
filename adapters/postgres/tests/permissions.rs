@@ -7,18 +7,18 @@
 //! a per-test tag and no test depends on absolute catalog versions.
 //!
 //! Run with:
-//!   cargo test -p auth-lib-postgres --test permissions
+//!   cargo test -p z-auth-postgres --test permissions
 
 mod helpers;
 
 use std::net::{IpAddr, Ipv4Addr};
 
-use auth_lib::AuthError;
-use auth_lib::AuthLib;
-use auth_lib::access::NewRole;
-use auth_lib::authentication::{ClientContext, Credentials, TokenPair};
-use auth_lib::authorization::{NewPermission, PermissionKind, PermissionValue};
-use auth_lib::user::RegisterUser;
+use z_auth::AuthError;
+use z_auth::ZAuth;
+use z_auth::identity::access::NewRole;
+use z_auth::identity::user::RegisterUser;
+use z_auth::security::authentication::{ClientContext, Credentials, TokenPair};
+use z_auth::security::authorization::{NewPermission, PermissionKind, PermissionValue};
 use uuid::Uuid;
 
 use crate::helpers::{cleanup_user_by_id, create_test_user, make_service_in, unique_email};
@@ -38,7 +38,7 @@ struct Codes {
     upload: String,
 }
 
-async fn define_catalog(auth: &AuthLib, t: &str) -> Codes {
+async fn define_catalog(auth: &ZAuth, t: &str) -> Codes {
     let codes = Codes {
         view: format!("t{t}.reports.view"),
         export: format!("t{t}.reports.export"),
@@ -79,13 +79,13 @@ async fn define_catalog(auth: &AuthLib, t: &str) -> Codes {
     codes
 }
 
-async fn drop_catalog(auth: &AuthLib, codes: &Codes) {
+async fn drop_catalog(auth: &ZAuth, codes: &Codes) {
     for code in [&codes.view, &codes.export, &codes.region, &codes.upload] {
         auth.permissions().delete(code).await.unwrap();
     }
 }
 
-async fn user(auth: &AuthLib) -> (Uuid, String) {
+async fn user(auth: &ZAuth) -> (Uuid, String) {
     let email = unique_email("perm");
     let user = create_test_user(
         auth,
@@ -101,17 +101,14 @@ async fn user(auth: &AuthLib) -> (Uuid, String) {
     (user.id, email)
 }
 
-async fn login(auth: &AuthLib, email: &str) -> TokenPair {
+async fn login(auth: &ZAuth, email: &str) -> TokenPair {
     auth.authentication()
         .login(
             Credentials {
                 email: email.into(),
                 password: PASSWORD.into(),
             },
-            ClientContext {
-                ip: IP,
-                user_agent: None,
-            },
+            ClientContext::new(IP),
         )
         .await
         .unwrap()
@@ -126,7 +123,7 @@ async fn test_catalog_round_trips_every_kind_with_permanent_positions() {
     // The cache (updated by `define`) matches a fresh load from Postgres.
     let cached = auth.permissions().catalog().unwrap();
     let loaded = auth.permissions().reload_catalog().await.unwrap();
-    let ours = |c: &auth_lib::authorization::PermissionCatalog| {
+    let ours = |c: &z_auth::security::authorization::PermissionCatalog| {
         let mut v: Vec<_> = c
             .permissions
             .iter()
@@ -261,10 +258,7 @@ async fn test_combined_merge_in_sql_matches_the_documented_rules() {
         .refresh(
             &pair.access_token,
             &pair.refresh_token,
-            ClientContext {
-                ip: IP,
-                user_agent: None,
-            },
+            ClientContext::new(IP),
         )
         .await
         .unwrap();
@@ -312,4 +306,63 @@ async fn test_role_codes_are_unique_and_validated() {
         .unwrap_err();
     assert!(matches!(dup, AuthError::RoleAlreadyExists), "got {dup:?}");
     auth.roles().delete(role.id).await.unwrap();
+}
+
+#[tokio::test]
+async fn test_direct_grants_are_listed_per_owner() {
+    use z_auth::security::authorization::GrantView;
+
+    let auth = make_service_in("combined").await;
+    let t = tag();
+    let codes = define_catalog(&auth, &t).await;
+    let (user_id, _) = user(&auth).await;
+    let role = auth
+        .roles()
+        .create(&NewRole {
+            code: format!("t{t}.lister"),
+            name: format!("t{t} lister"),
+            description: None,
+        })
+        .await
+        .unwrap();
+
+    let p = auth.permissions();
+    p.grant_to_user(
+        user_id,
+        &codes.export,
+        &PermissionValue::Choices(vec!["xlsx".into(), "csv".into()]),
+    )
+    .await
+    .unwrap();
+    p.grant_to_user(user_id, &codes.upload, &PermissionValue::Text("50".into()))
+        .await
+        .unwrap();
+    p.grant_to_role(role.id, &codes.region, &PermissionValue::Choice("us".into()))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        p.user_grants(user_id).await.unwrap(),
+        [
+            GrantView {
+                permission_code: codes.export.clone(),
+                value: PermissionValue::Choices(vec!["csv".into(), "xlsx".into()]),
+            },
+            GrantView {
+                permission_code: codes.upload.clone(),
+                value: PermissionValue::Text("50".into()),
+            },
+        ]
+    );
+    assert_eq!(
+        p.role_grants(role.id).await.unwrap(),
+        [GrantView {
+            permission_code: codes.region.clone(),
+            value: PermissionValue::Choice("us".into()),
+        }]
+    );
+
+    cleanup_user_by_id(&auth, user_id).await.unwrap();
+    auth.roles().delete(role.id).await.unwrap();
+    drop_catalog(&auth, &codes).await;
 }

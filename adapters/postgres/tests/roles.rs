@@ -6,13 +6,13 @@
 //!   DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
 //!
 //! Run with:
-//!   cargo test -p auth-lib-postgres --test role_user -- --test-threads=1
+//!   cargo test -p z-auth-postgres --test role_user -- --test-threads=1
 //! or:
-//!   cargo test -p auth-lib-postgres --test role_user
+//!   cargo test -p z-auth-postgres --test role_user
 
 mod helpers;
 
-use auth_lib::access::NewRole;
+use z_auth::identity::access::NewRole;
 
 use crate::helpers::{cleanup_role_by_name, code_of, make_service, unique_name};
 
@@ -286,7 +286,7 @@ async fn test_create_duplicate_name_fails() {
         msg.contains("unique")
             || msg.contains("duplicate")
             || msg.contains("already exists")
-            || msg.contains("roles_name_key"),
+            || msg.contains("identity_roles_name_key"),
         "Expected a uniqueness violation, got: {err:?}"
     );
 
@@ -328,11 +328,79 @@ async fn test_db_unique_index_rejects_duplicate_name() {
         msg.contains("unique")
             || msg.contains("duplicate")
             || msg.contains("already exists")
-            || msg.contains("roles_name_key"),
+            || msg.contains("identity_roles_name_key"),
         "Expected a DB uniqueness violation, got: {err:?}"
     );
 
     cleanup_role_by_name(&service, &name)
         .await
         .expect("cleanup failed");
+}
+
+#[tokio::test]
+async fn test_update_role_name_and_description() {
+    use z_auth::AuthError;
+    use z_auth::identity::access::RoleUpdate;
+
+    let service = make_service().await;
+    let name = unique_name("updatable");
+    let taken = unique_name("taken");
+    let role = service.roles().create(&new_role(&name)).await.unwrap();
+    let other = service.roles().create(&new_role(&taken)).await.unwrap();
+
+    let renamed_to = unique_name("renamed");
+    let renamed = service
+        .roles()
+        .update(
+            role.id,
+            &RoleUpdate {
+                name: Some(renamed_to.clone()),
+                description: None,
+            },
+        )
+        .await
+        .unwrap()
+        .expect("role exists");
+    assert_eq!(renamed.name, renamed_to);
+    assert_eq!(renamed.code, role.code, "code is immutable");
+    assert_eq!(renamed.description, role.description);
+
+    let cleared = service
+        .roles()
+        .update(
+            role.id,
+            &RoleUpdate {
+                name: None,
+                description: Some(None),
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(cleared.description.is_none());
+
+    let err = service
+        .roles()
+        .update(
+            role.id,
+            &RoleUpdate {
+                name: Some(taken.clone()),
+                description: None,
+            },
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, AuthError::RoleAlreadyExists), "got {err:?}");
+
+    assert!(
+        service
+            .roles()
+            .update(uuid::Uuid::new_v4(), &RoleUpdate::default())
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    service.roles().delete(role.id).await.unwrap();
+    service.roles().delete(other.id).await.unwrap();
 }

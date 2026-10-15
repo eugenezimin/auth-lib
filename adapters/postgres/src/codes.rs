@@ -1,7 +1,7 @@
-//! Numeric conversions between auth-lib types and Postgres columns.
+//! Numeric conversions between z-auth types and Postgres columns.
 //! (Enum ↔ ENUM mapping lives in [`crate::enums`].)
 
-use auth_lib::AuthError;
+use z_auth::AuthError;
 
 /// `u32` generation ↔ Postgres `integer`.
 pub(crate) fn to_db_generation(generation: u32) -> Result<i32, AuthError> {

@@ -4,8 +4,10 @@
 //! `sqlx::query_as` API so no `DATABASE_URL` is required at compile time.
 
 use async_trait::async_trait;
-use auth_lib::AuthError;
-use auth_lib::user::{NewUser, User, UserRepository, UserUpdate, UserWithRoles};
+use z_auth::AuthError;
+use z_auth::identity::user::{
+    NewUser, User, UserPage, UserQuery, UserRepository, UserUpdate, UserWithRoles,
+};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -112,6 +114,25 @@ impl UserRepository for PgUserRepository {
                 .await
                 .map_err(map_sqlx_error)?;
         Ok(fold_user_with_roles(rows))
+    }
+
+    async fn list(&self, query: &UserQuery) -> Result<UserPage, AuthError> {
+        let rows: Vec<UserRow> = sqlx::query_as(user_queries::LIST_USERS)
+            .bind(&query.search)
+            .bind(i64::from(query.limit))
+            .bind(i64::from(query.offset))
+            .fetch_all(&self.pool)
+            .await
+            .map_err(map_sqlx_error)?;
+        let (total,): (i64,) = sqlx::query_as(user_queries::COUNT_USERS)
+            .bind(&query.search)
+            .fetch_one(&self.pool)
+            .await
+            .map_err(map_sqlx_error)?;
+        Ok(UserPage {
+            items: rows.into_iter().map(Into::into).collect(),
+            total: total as u64,
+        })
     }
 
     async fn exists_by_email(&self, email: &str) -> Result<bool, AuthError> {

@@ -1,8 +1,8 @@
-//! Shared helpers for auth-lib-postgres integration tests.
+//! Shared helpers for z-auth-postgres integration tests.
 //!
 //! These tests talk to a real PostgreSQL database; [`pool`] applies any
 //! pending migrations first (create the database once with
-//! `cargo run -p auth-lib-postgres --bin setup_db`).  Connection settings come
+//! `cargo run -p z-auth-postgres --bin setup_db`).  Connection settings come
 //! from `DB_*` env vars, falling back to a local default.
 //!
 //! Import with:
@@ -16,14 +16,14 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use auth_lib::{
-    AuthError, AuthLib,
-    access::{NewRole, Role},
-    config::RawConfig,
-    token::keys::{generate_refresh_secret, generate_signing_key},
-    user::{RegisterUser, User},
+use z_auth::{
+    AuthError, ZAuth,
+    conf::config::RawConfig,
+    identity::access::{NewRole, Role},
+    identity::user::{RegisterUser, User},
+    security::token::keys::{generate_refresh_secret, generate_signing_key},
 };
-use auth_lib_postgres::{
+use z_auth_postgres::{
     PgConfig, PgPermissionRepository, build_pg_pool, repositories, run_migrations,
 };
 
@@ -55,25 +55,59 @@ pub async fn pool() -> sqlx::PgPool {
     pool
 }
 
+/// A pool with the core and the cluster migrations applied (feature
+/// `shared`).
+#[cfg(feature = "shared")]
+pub async fn cluster_pool() -> sqlx::PgPool {
+    let pool = pool().await;
+    z_auth_postgres::run_cluster_migrations(&pool)
+        .await
+        .expect("Failed to run cluster migrations");
+    pool
+}
+
+/// A pool on a fresh schema with the session-store migrations applied
+/// (federation mode, non-authority services).
+#[cfg(feature = "federation")]
+pub async fn session_store_pool(schema: &str) -> sqlx::PgPool {
+    let admin = pool().await;
+    sqlx::query(&format!("CREATE SCHEMA IF NOT EXISTS {schema}"))
+        .execute(&admin)
+        .await
+        .expect("create schema");
+    let options = z_auth_postgres::pool::connect_options(&pg_config().connection_url())
+        .expect("options")
+        .options([("search_path", schema)]);
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(5)
+        .connect_with(options)
+        .await
+        .expect("connect");
+    z_auth_postgres::run_session_store_migrations(&pool)
+        .await
+        .expect("session-store migrations");
+    pool
+}
+
 /// A service in the default authorization mode (`rbac`).
-pub async fn make_service() -> AuthLib {
+pub async fn make_service() -> ZAuth {
     make_service_in("rbac").await
 }
 
 /// A service in the given authorization mode (`none` | `rbac` |
 /// `permissions` | `combined`).
-pub async fn make_service_in(authz_mode: &str) -> AuthLib {
+pub async fn make_service_in(authz_mode: &str) -> ZAuth {
     let pool = pool().await;
     let keys = generate_signing_key().expect("key generation");
     let config = RawConfig::default()
         .jwt_signing_key(keys.signing_key)
-        .jwt_issuer("auth-lib-test")
+        .jwt_issuer("z-auth-test")
         .refresh_secret(generate_refresh_secret().expect("secret generation"))
         .authz_mode(authz_mode)
         .build()
         .expect("Failed to build test config");
 
-    AuthLib::builder(config, repositories(&pool))
+    ZAuth::builder(config, repositories(&pool))
         .permissions(Arc::new(PgPermissionRepository::new(pool)))
         .build()
         .expect("Failed to build auth service")
@@ -100,7 +134,7 @@ pub fn unique_email(prefix: &str) -> String {
 
 /// Insert a user (replacing any existing one with the same email) and return
 /// the persisted [`User`].  Clean up with [`cleanup_user_by_id`].
-pub async fn create_test_user(service: &AuthLib, user_request: RegisterUser) -> User {
+pub async fn create_test_user(service: &ZAuth, user_request: RegisterUser) -> User {
     if let Some(u) = service
         .users()
         .find_by_email(&user_request.email)
@@ -119,13 +153,13 @@ pub async fn create_test_user(service: &AuthLib, user_request: RegisterUser) -> 
 }
 
 /// Delete a user by ID; returns `true` if a row was removed.
-pub async fn cleanup_user_by_id(service: &AuthLib, id: uuid::Uuid) -> Result<bool, AuthError> {
+pub async fn cleanup_user_by_id(service: &ZAuth, id: uuid::Uuid) -> Result<bool, AuthError> {
     service.users().delete(id).await.map(|res| res.is_some())
 }
 
 /// Delete a user by email if they exist.
 pub async fn cleanup_user_by_email(
-    service: &AuthLib,
+    service: &ZAuth,
     email: &str,
 ) -> Result<Option<uuid::Uuid>, AuthError> {
     match service.users().find_by_email(email).await? {
@@ -138,7 +172,7 @@ pub async fn cleanup_user_by_email(
 
 /// Insert a role (replacing any existing one with the same name) and return
 /// the persisted [`Role`].
-pub async fn create_test_role(service: &AuthLib, test_role: &NewRole) -> Role {
+pub async fn create_test_role(service: &ZAuth, test_role: &NewRole) -> Role {
     if let Some(r) = service
         .roles()
         .find_by_name(&test_role.name)
@@ -158,7 +192,7 @@ pub async fn create_test_role(service: &AuthLib, test_role: &NewRole) -> Role {
 
 /// Delete a role by ID; returns `Some(id)` if a row was removed.
 pub async fn cleanup_role_by_id(
-    service: &AuthLib,
+    service: &ZAuth,
     role_id: uuid::Uuid,
 ) -> Result<Option<uuid::Uuid>, AuthError> {
     service.roles().delete(role_id).await
@@ -166,7 +200,7 @@ pub async fn cleanup_role_by_id(
 
 /// Delete a role by name if it exists.
 pub async fn cleanup_role_by_name(
-    service: &AuthLib,
+    service: &ZAuth,
     name: &str,
 ) -> Result<Option<uuid::Uuid>, AuthError> {
     match service.roles().find_by_name(name).await? {

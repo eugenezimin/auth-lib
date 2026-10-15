@@ -7,7 +7,7 @@
 
 ///
 /// Run with:
-///   cargo test -p auth-lib-postgres --test registration_test -- --test-threads=1
+///   cargo test -p z-auth-postgres --test registration_test -- --test-threads=1
 ///
 /// `--test-threads=1` keeps tests sequential so each one starts from a clean
 /// slate without races on shared database state.
@@ -16,11 +16,11 @@
 ///
 mod helpers;
 
-use auth_lib::{
+use z_auth::{
     AuthError,
-    user::{NewUser, RegisterUser, UserRepository},
+    identity::user::{NewUser, RegisterUser, UserRepository},
 };
-use auth_lib_postgres::PgUserRepository;
+use z_auth_postgres::PgUserRepository;
 
 use crate::helpers::{cleanup_user_by_email, make_service, pool};
 
@@ -366,7 +366,7 @@ async fn test_db_unique_indexes_are_case_insensitive() {
             format!("other_{tag}"),
         ))
         .await
-        .expect_err("email differing only in case must violate users_email");
+        .expect_err("email differing only in case must violate identity_users_email");
     assert!(matches!(err, AuthError::EmailAlreadyTaken), "got: {err:?}");
 
     let err = repo
@@ -375,7 +375,7 @@ async fn test_db_unique_indexes_are_case_insensitive() {
             format!("NAME_{tag}"),
         ))
         .await
-        .expect_err("username differing only in case must violate users_username_key");
+        .expect_err("username differing only in case must violate identity_users_username_key");
     assert!(
         matches!(err, AuthError::UsernameAlreadyTaken),
         "got: {err:?}"
@@ -399,4 +399,64 @@ async fn test_db_unique_indexes_are_case_insensitive() {
     );
 
     repo.delete(user.id).await.unwrap();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Listing
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_list_filters_by_substring_and_pages() {
+    use z_auth::identity::user::UserQuery;
+
+    let service = make_service().await;
+    // A tag unique to this run keeps other tests' users out of the result.
+    let tag = uuid::Uuid::new_v4().simple().to_string()[..12].to_string();
+    let mut ids = Vec::new();
+    for i in 0..3 {
+        let user = service
+            .users()
+            .register(RegisterUser {
+                email: format!("list{i}_{tag}@test.example.com"),
+                password: "S3cur3P@ssw0rd!".into(),
+                username: Some(format!("Lister{i}_{tag}")),
+                first_name: None,
+                last_name: None,
+            })
+            .await
+            .unwrap();
+        ids.push(user.id);
+    }
+
+    let query = |search: &str, limit, offset| UserQuery {
+        search: Some(search.into()),
+        limit,
+        offset,
+    };
+    let all = service.users().list(query(&tag.to_uppercase(), 0, 0)).await.unwrap();
+    assert_eq!(all.total, 3, "case-insensitive substring");
+    assert_eq!(all.items.len(), 3);
+    assert_eq!(all.items[0].id, ids[2], "newest first");
+
+    let page = service.users().list(query(&tag, 2, 2)).await.unwrap();
+    assert_eq!(page.total, 3);
+    assert_eq!(page.items.len(), 1);
+
+    let one = service
+        .users()
+        .list(query(&format!("lister1_{tag}"), 0, 0))
+        .await
+        .unwrap();
+    assert_eq!(one.items.len(), 1, "matches the username too");
+    assert_eq!(one.items[0].id, ids[1]);
+
+    let wildcard = service.users().list(query("%_%", 0, 0)).await.unwrap();
+    assert!(
+        wildcard.items.iter().all(|u| u.email.contains("%_%")),
+        "LIKE wildcards match literally"
+    );
+
+    for id in ids {
+        service.users().delete(id).await.unwrap();
+    }
 }

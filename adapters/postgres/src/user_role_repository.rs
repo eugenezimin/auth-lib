@@ -3,8 +3,8 @@
 //! All SQL lives in [`crate::queries::user_role_queries`].
 
 use async_trait::async_trait;
-use auth_lib::AuthError;
-use auth_lib::access::{UserRole, UserRoleRepository};
+use z_auth::AuthError;
+use z_auth::identity::access::{UserRole, UserRoleRepository};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -83,5 +83,13 @@ impl UserRoleRepository for PgUserRoleRepository {
             .await
             .map_err(map_sqlx_error)?;
         Ok(result.rows_affected())
+    }
+
+    async fn list_active_holders(&self, role_id: Uuid) -> Result<Vec<Uuid>, AuthError> {
+        sqlx::query_scalar(user_role_queries::LIST_ACTIVE_HOLDERS)
+            .bind(role_id)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(map_sqlx_error)
     }
 }

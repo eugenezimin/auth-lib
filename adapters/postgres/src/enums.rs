@@ -5,10 +5,10 @@
 //! these directly as `session_status` / `revocation_scope` /
 //! `revocation_reason` — no text casts in SQL.
 
-use auth_lib::authentication::SessionStatus;
-use auth_lib::authorization::PermissionKind;
-use auth_lib::cluster::{HeartbeatStatus, NodeState};
-use auth_lib::token::{KeyStatus, RevocationReason, RevocationStatus};
+use z_auth::security::authorization::PermissionKind;
+use z_auth::security::session::RevocationReason;
+use z_auth::security::session::SessionStatus;
+use z_auth::security::token::{KeyStatus, RevocationStatus};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type)]
 #[sqlx(type_name = "session_status", rename_all = "snake_case")]
@@ -23,6 +23,7 @@ pub(crate) enum PgSessionStatus {
 pub(crate) enum PgRevocationScope {
     Session,
     User,
+    Token,
 }
 
 /// Kind of a catalog entry; `text`'s length cap lives in its own column.
@@ -49,6 +50,7 @@ pub(crate) enum PgRevocationReason {
     AccountDisabled,
     AccountDeleted,
     RevokedTokenUsed,
+    ConcurrentRefresh,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type)]
@@ -56,21 +58,6 @@ pub(crate) enum PgRevocationReason {
 pub(crate) enum PgRevocationStatus {
     Pending,
     Enforced,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type)]
-#[sqlx(type_name = "node_state", rename_all = "snake_case")]
-pub(crate) enum PgNodeState {
-    Joining,
-    Active,
-    Leaving,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type)]
-#[sqlx(type_name = "heartbeat_status", rename_all = "snake_case")]
-pub(crate) enum PgHeartbeatStatus {
-    Online,
-    Offline,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type)]
@@ -114,6 +101,7 @@ impl From<RevocationReason> for PgRevocationReason {
             RevocationReason::AccountDisabled => Self::AccountDisabled,
             RevocationReason::AccountDeleted => Self::AccountDeleted,
             RevocationReason::RevokedTokenUsed => Self::RevokedTokenUsed,
+            RevocationReason::ConcurrentRefresh => Self::ConcurrentRefresh,
         }
     }
 }
@@ -132,6 +120,7 @@ impl From<PgRevocationReason> for RevocationReason {
             PgRevocationReason::AccountDisabled => Self::AccountDisabled,
             PgRevocationReason::AccountDeleted => Self::AccountDeleted,
             PgRevocationReason::RevokedTokenUsed => Self::RevokedTokenUsed,
+            PgRevocationReason::ConcurrentRefresh => Self::ConcurrentRefresh,
         }
     }
 }
@@ -156,40 +145,29 @@ impl From<PgRevocationStatus> for RevocationStatus {
     }
 }
 
-impl From<PgNodeState> for NodeState {
-    fn from(s: PgNodeState) -> Self {
-        match s {
-            PgNodeState::Joining => Self::Joining,
-            PgNodeState::Active => Self::Active,
-            PgNodeState::Leaving => Self::Leaving,
-        }
-    }
-}
-
-impl From<NodeState> for PgNodeState {
-    fn from(s: NodeState) -> Self {
-        match s {
-            NodeState::Joining => Self::Joining,
-            NodeState::Active => Self::Active,
-            NodeState::Leaving => Self::Leaving,
-        }
-    }
-}
-
-impl From<PgHeartbeatStatus> for HeartbeatStatus {
-    fn from(s: PgHeartbeatStatus) -> Self {
-        match s {
-            PgHeartbeatStatus::Online => Self::Online,
-            PgHeartbeatStatus::Offline => Self::Offline,
-        }
-    }
-}
-
 impl From<PgKeyStatus> for KeyStatus {
     fn from(s: PgKeyStatus) -> Self {
         match s {
             PgKeyStatus::Active => Self::Active,
             PgKeyStatus::Revoked => Self::Revoked,
+        }
+    }
+}
+
+impl From<RevocationStatus> for PgRevocationStatus {
+    fn from(s: RevocationStatus) -> Self {
+        match s {
+            RevocationStatus::Pending => Self::Pending,
+            RevocationStatus::Enforced => Self::Enforced,
+        }
+    }
+}
+
+impl From<KeyStatus> for PgKeyStatus {
+    fn from(s: KeyStatus) -> Self {
+        match s {
+            KeyStatus::Active => Self::Active,
+            KeyStatus::Revoked => Self::Revoked,
         }
     }
 }
