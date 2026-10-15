@@ -1,4 +1,4 @@
-//! In-memory implementations of every auth-lib repository port.
+//! In-memory implementations of every z-auth repository port.
 //!
 //! **Test-only** — lets the core test suite run without a database.  A single
 //! [`InMemoryDb`] implements all ports over shared state so cross-port
@@ -7,7 +7,6 @@
 //! injected [`Clock`], so tests can time-travel by advancing it.
 
 use std::collections::HashMap;
-use std::net::IpAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -16,11 +15,12 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-use auth_lib::authorization::{
+use z_auth::prelude::*;
+use z_auth::security::authorization::{
     EffectiveGrants, PermissionAssignment, PermissionGrant, PermissionOption,
 };
-use auth_lib::prelude::*;
-use auth_lib::token::KeyStatus;
+use z_auth::security::session::IssueContext;
+use z_auth::security::token::KeyStatus;
 
 #[derive(Default)]
 struct State {
@@ -37,10 +37,59 @@ struct State {
     user_grants: Vec<GrantRow>,
     role_grants: Vec<GrantRow>,
     keys: HashMap<String, VerifyingKeyRecord>,
-    #[cfg(feature = "cluster")]
+    #[cfg(feature = "shared")]
     nodes: HashMap<Uuid, NodeRecord>,
-    #[cfg(feature = "cluster")]
+    #[cfg(feature = "shared")]
     node_writes: usize,
+    #[cfg(feature = "shared")]
+    node_reads: usize,
+    /// node id → when it was retired (federation mode)
+    #[cfg(feature = "shared")]
+    retired_at: HashMap<Uuid, DateTime<Utc>>,
+
+    // ── sync (federation mode) ──────────────────────────────────────────
+    /// (kind, key) → seq of the record's latest change
+    feed: HashMap<(&'static str, String), u64>,
+    seq: u64,
+    site_id: Option<Uuid>,
+    /// session id → revision, bumped by every session write
+    session_revs: HashMap<Uuid, u64>,
+    /// session id → losing fork variants: (generation, variant)
+    #[cfg(feature = "federation")]
+    alias_variants: HashMap<Uuid, Vec<(u32, z_auth::cluster::federation::GenerationVariant)>>,
+    #[cfg(feature = "federation")]
+    accounts: HashMap<Uuid, z_auth::cluster::federation::AccountSnapshot>,
+    #[cfg(feature = "federation")]
+    catalog_snapshot: Option<z_auth::cluster::federation::CatalogSnapshot>,
+    #[cfg(feature = "federation")]
+    cursors:
+        HashMap<z_auth::cluster::federation::SiteId, z_auth::cluster::federation::FeedCursor>,
+    caught_up: HashMap<String, DateTime<Utc>>,
+    versions: u64,
+    /// Records applied from other clusters (for "no ping-pong" checks).
+    applied: usize,
+}
+
+const FEED_SESSION: &str = "session";
+const FEED_REVOCATION: &str = "revocation";
+const FEED_KEY: &str = "verifying_key";
+#[cfg(feature = "federation")]
+const FEED_ACCOUNT: &str = "account";
+#[cfg(feature = "federation")]
+const FEED_CATALOG: &str = "catalog";
+
+impl State {
+    /// Record a change in the feed, as the Postgres triggers do.
+    fn touch(&mut self, kind: &'static str, key: impl Into<String>) {
+        self.seq += 1;
+        let key = key.into();
+        if kind == FEED_SESSION
+            && let Ok(id) = key.parse::<Uuid>()
+        {
+            *self.session_revs.entry(id).or_default() += 1;
+        }
+        self.feed.insert((kind, key), self.seq);
+    }
 }
 
 /// One stored grant row: a `bool` (no option, no text), one chosen option,
@@ -405,6 +454,19 @@ impl UserRoleRepository for InMemoryDb {
         }
         Ok(count)
     }
+
+    async fn list_active_holders(&self, role_id: Uuid) -> Result<Vec<Uuid>, AuthError> {
+        let mut ids: Vec<Uuid> = self
+            .lock()
+            .user_roles
+            .iter()
+            .filter(|ur| ur.role_id == role_id && ur.revoked_at.is_none())
+            .map(|ur| ur.user_id)
+            .collect();
+        ids.sort();
+        ids.dedup();
+        Ok(ids)
+    }
 }
 
 // ── SessionRepository ─────────────────────────────────────────────────────────
@@ -416,7 +478,7 @@ fn is_live(s: &Session, now: DateTime<Utc>) -> bool {
 fn new_generation(
     session_id: Uuid,
     generation: u32,
-    issued_ip: IpAddr,
+    issued: &IssueContext,
     now: DateTime<Utc>,
     lifetimes: &SessionLifetimes,
 ) -> SessionGeneration {
@@ -424,10 +486,14 @@ fn new_generation(
         session_id,
         generation,
         access_jti: Uuid::new_v4(),
-        issued_ip,
+        issued_ip: issued.ip,
         issued_at: now,
         access_expires_at: now + lifetimes.access_ttl,
         superseded_at: None,
+        parent_jti: issued.parent_jti,
+        issued_user_agent: issued.user_agent.clone(),
+        fingerprint_hash: issued.fingerprint_hash,
+        aliases: Vec::new(),
     }
 }
 
@@ -450,21 +516,33 @@ impl SessionRepository for InMemoryDb {
         let session = Session {
             id: Uuid::new_v4(),
             user_id: new.user_id,
-            secret: new.secret,
+            secret: new.secret.clone(),
             status: SessionStatus::Active,
             end_reason: None,
             created_ip: new.created_ip,
-            user_agent: new.user_agent,
+            user_agent: new.user_agent.clone(),
             current_generation: 1,
             created_at: now,
             idle_expires_at: now + lifetimes.idle_timeout,
             absolute_expires_at: now + lifetimes.absolute_timeout,
             ended_at: None,
         };
-        let first = new_generation(session.id, 1, session.created_ip, now, lifetimes);
+        let first = new_generation(
+            session.id,
+            1,
+            &IssueContext {
+                ip: session.created_ip,
+                user_agent: session.user_agent.clone(),
+                fingerprint_hash: new.fingerprint_hash,
+                parent_jti: None,
+            },
+            now,
+            lifetimes,
+        );
         let mut s = self.lock();
         s.generations.insert(session.id, vec![first.clone()]);
         s.sessions.insert(session.id, session.clone());
+        s.touch(FEED_SESSION, session.id.to_string());
         Ok((session, first))
     }
 
@@ -499,7 +577,7 @@ impl SessionRepository for InMemoryDb {
         &self,
         session_id: Uuid,
         expected_generation: u32,
-        issued_ip: IpAddr,
+        issued: &IssueContext,
         lifetimes: &SessionLifetimes,
     ) -> Result<RotateOutcome, AuthError> {
         let now = self.now();
@@ -517,7 +595,7 @@ impl SessionRepository for InMemoryDb {
         session.idle_expires_at = now + lifetimes.idle_timeout;
         let session = session.clone();
 
-        let generation = new_generation(session_id, newest, issued_ip, now, lifetimes);
+        let generation = new_generation(session_id, newest, issued, now, lifetimes);
         let gens = s.generations.entry(session_id).or_default();
         if let Some(prev) = gens
             .iter_mut()
@@ -527,6 +605,11 @@ impl SessionRepository for InMemoryDb {
         }
         gens.push(generation.clone());
         gens.retain(|g| g.generation + lifetimes.history_size > newest);
+        #[cfg(feature = "federation")]
+        if let Some(aliases) = s.alias_variants.get_mut(&session_id) {
+            aliases.retain(|(g, _)| g + lifetimes.history_size > newest);
+        }
+        s.touch(FEED_SESSION, session_id.to_string());
         Ok(RotateOutcome::Rotated {
             session,
             generation,
@@ -546,6 +629,7 @@ impl SessionRepository for InMemoryDb {
                 session.status = status;
                 session.end_reason = Some(reason);
                 session.ended_at = Some(now);
+                s.touch(FEED_SESSION, session_id.to_string());
                 Ok(true)
             }
             _ => Ok(false),
@@ -560,13 +644,17 @@ impl SessionRepository for InMemoryDb {
     ) -> Result<Vec<Uuid>, AuthError> {
         let now = self.now();
         let mut ended = Vec::new();
-        for session in self.lock().sessions.values_mut() {
+        let mut s = self.lock();
+        for session in s.sessions.values_mut() {
             if session.user_id == user_id && session.status == SessionStatus::Active {
                 session.status = status;
                 session.end_reason = Some(reason);
                 session.ended_at = Some(now);
                 ended.push(session.id);
             }
+        }
+        for id in &ended {
+            s.touch(FEED_SESSION, id.to_string());
         }
         Ok(ended)
     }
@@ -583,6 +671,7 @@ impl SessionRepository for InMemoryDb {
                 session.status = SessionStatus::Compromised;
                 session.end_reason = Some(reason);
                 session.ended_at.get_or_insert(now);
+                s.touch(FEED_SESSION, session_id.to_string());
                 Ok(true)
             }
             None => Ok(false),
@@ -640,14 +729,17 @@ impl RevocationRepository for InMemoryDb {
             enforced_at: None,
             enforced_by: None,
         };
-        self.lock().revocations.push(revocation.clone());
+        let mut s = self.lock();
+        s.revocations.push(revocation.clone());
+        s.touch(FEED_REVOCATION, revocation.id.to_string());
         Ok(revocation)
     }
 
     async fn mark_enforced(&self, id: Uuid, by: Uuid) -> Result<Option<Revocation>, AuthError> {
         let now = self.now();
         let mut s = self.lock();
-        Ok(s.revocations
+        let enforced = s
+            .revocations
             .iter_mut()
             .find(|r| r.id == id && r.status == RevocationStatus::Pending)
             .map(|r| {
@@ -655,7 +747,11 @@ impl RevocationRepository for InMemoryDb {
                 r.enforced_at = Some(now);
                 r.enforced_by = Some(by);
                 r.clone()
-            }))
+            });
+        if enforced.is_some() {
+            s.touch(FEED_REVOCATION, id.to_string());
+        }
+        Ok(enforced)
     }
 
     async fn list_active(&self) -> Result<Vec<Revocation>, AuthError> {
@@ -684,30 +780,39 @@ impl RevocationRepository for InMemoryDb {
 impl KeyRepository for InMemoryDb {
     async fn publish(&self, key: &NewVerifyingKey) -> Result<VerifyingKeyRecord, AuthError> {
         let now = self.now();
-        Ok(self
-            .lock()
-            .keys
-            .entry(key.kid.clone())
-            .or_insert_with(|| VerifyingKeyRecord {
-                kid: key.kid.clone(),
-                public_key: key.public_key,
-                status: KeyStatus::Active,
-                published_by: Some(key.published_by),
-                created_at: now,
-                revoked_at: None,
-            })
-            .clone())
+        let mut s = self.lock();
+        if let Some(existing) = s.keys.get(&key.kid) {
+            return Ok(existing.clone());
+        }
+        let record = VerifyingKeyRecord {
+            kid: key.kid.clone(),
+            public_key: key.public_key,
+            status: KeyStatus::Active,
+            published_by: Some(key.published_by),
+            created_at: now,
+            revoked_at: None,
+        };
+        s.keys.insert(key.kid.clone(), record.clone());
+        s.touch(FEED_KEY, key.kid.clone());
+        Ok(record)
     }
 
     async fn revoke(&self, kid: &str) -> Result<Option<VerifyingKeyRecord>, AuthError> {
         let now = self.now();
-        Ok(self.lock().keys.get_mut(kid).map(|k| {
+        let mut s = self.lock();
+        let mut changed = false;
+        let record = s.keys.get_mut(kid).map(|k| {
             if k.status == KeyStatus::Active {
                 k.status = KeyStatus::Revoked;
                 k.revoked_at = Some(now);
+                changed = true;
             }
             k.clone()
-        }))
+        });
+        if changed {
+            s.touch(FEED_KEY, kid.to_string());
+        }
+        Ok(record)
     }
 
     async fn list(&self) -> Result<Vec<VerifyingKeyRecord>, AuthError> {
@@ -717,7 +822,7 @@ impl KeyRepository for InMemoryDb {
 
 // ── NodeRepository ────────────────────────────────────────────────────────────
 
-#[cfg(feature = "cluster")]
+#[cfg(feature = "shared")]
 impl InMemoryDb {
     /// A node's registry row (for assertions).
     pub fn node(&self, node_id: Uuid) -> Option<NodeRecord> {
@@ -734,9 +839,19 @@ impl InMemoryDb {
     pub fn node_writes(&self) -> usize {
         self.lock().node_writes
     }
+
+    /// Registry reads (`list`) so far.
+    pub fn node_reads(&self) -> usize {
+        self.lock().node_reads
+    }
+
+    /// Every registry row (for assertions).
+    pub fn nodes(&self) -> Vec<NodeRecord> {
+        self.lock().nodes.values().cloned().collect()
+    }
 }
 
-#[cfg(feature = "cluster")]
+#[cfg(feature = "shared")]
 #[async_trait]
 impl NodeRepository for InMemoryDb {
     async fn register(&self, node: &NodeInfo) -> Result<(), AuthError> {
@@ -827,7 +942,59 @@ impl NodeRepository for InMemoryDb {
     }
 
     async fn list(&self) -> Result<Vec<NodeRecord>, AuthError> {
-        Ok(self.lock().nodes.values().cloned().collect())
+        let mut s = self.lock();
+        s.node_reads += 1;
+        Ok(s.nodes.values().cloned().collect())
+    }
+
+    async fn evict(&self, target: Uuid, observer: Uuid) -> Result<EvictOutcome, AuthError> {
+        let now = self.now();
+        let mut s = self.lock();
+        let status = |s: &State, id| s.nodes.get(&id).map(|n| n.heartbeat);
+        let outcome = match (status(&s, observer), status(&s, target)) {
+            (None | Some(HeartbeatStatus::Missing), _) => EvictOutcome::ObserverMissing,
+            (_, None | Some(HeartbeatStatus::Missing)) => EvictOutcome::AlreadyMissing,
+            _ => {
+                let n = s.nodes.get_mut(&target).expect("checked above");
+                n.heartbeat = HeartbeatStatus::Missing;
+                n.heartbeat_changed_at = now;
+                s.retired_at.insert(target, now);
+                s.node_writes += 1;
+                EvictOutcome::Evicted
+            }
+        };
+        Ok(outcome)
+    }
+
+    async fn update_address(&self, node: &NodeInfo) -> Result<bool, AuthError> {
+        let mut s = self.lock();
+        let changed = match s.nodes.get_mut(&node.node_id) {
+            Some(n) if n.heartbeat != HeartbeatStatus::Missing && n.info != *node => {
+                n.info = node.clone();
+                true
+            }
+            _ => false,
+        };
+        s.node_writes += usize::from(changed);
+        Ok(changed)
+    }
+
+    async fn purge_retired(&self, older_than: Duration) -> Result<u64, AuthError> {
+        let now = self.now();
+        let horizon = chrono::Duration::from_std(older_than).unwrap_or(chrono::Duration::MAX);
+        let mut s = self.lock();
+        let expired: Vec<Uuid> = s
+            .retired_at
+            .iter()
+            .filter(|(_, at)| now - **at > horizon)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in &expired {
+            s.retired_at.remove(id);
+            s.nodes.remove(id);
+        }
+        s.node_writes += expired.len();
+        Ok(expired.len() as u64)
     }
 }
 
@@ -1089,5 +1256,313 @@ impl PermissionRepository for InMemoryDb {
             catalog_version: s.catalog_version(),
             grants,
         })
+    }
+}
+
+// ── SyncStore (federation mode) ───────────────────────────────────────────────
+
+#[cfg(feature = "federation")]
+mod sync_store {
+    use super::*;
+    use z_auth::cluster::federation::{
+        AccountSnapshot, ApplyOutcome, CatalogSnapshot, ChangePage, FeedCursor, GenerationVariant,
+        SessionAggregate, SiteId, SyncRecord, SyncStore, merge_key, merge_revocation,
+    };
+
+    impl State {
+        fn aggregate(&self, id: Uuid) -> Option<SessionAggregate> {
+            let session = self.sessions.get(&id)?;
+            let aliases = self.alias_variants.get(&id);
+            let gens: Vec<(SessionGeneration, Vec<GenerationVariant>)> = self
+                .generations
+                .get(&id)
+                .map(|gens| {
+                    gens.iter()
+                        .map(|g| {
+                            let variants = aliases
+                                .map(|a| {
+                                    a.iter()
+                                        .filter(|(n, _)| *n == g.generation)
+                                        .map(|(_, v)| v.clone())
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+                            (g.clone(), variants)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            Some(SessionAggregate::from_parts(session, &gens))
+        }
+
+        fn record(&self, kind: &str, key: &str) -> Option<SyncRecord> {
+            match kind {
+                FEED_SESSION => self
+                    .aggregate(key.parse().ok()?)
+                    .map(|a| SyncRecord::Session(Box::new(a))),
+                FEED_REVOCATION => {
+                    let id: Uuid = key.parse().ok()?;
+                    self.revocations
+                        .iter()
+                        .find(|r| r.id == id)
+                        .cloned()
+                        .map(SyncRecord::Revocation)
+                }
+                FEED_KEY => self.keys.get(key).cloned().map(SyncRecord::VerifyingKey),
+                FEED_ACCOUNT => self
+                    .accounts
+                    .get(&key.parse().ok()?)
+                    .cloned()
+                    .map(SyncRecord::Account),
+                FEED_CATALOG => self
+                    .catalog_snapshot
+                    .clone()
+                    .map(|c| SyncRecord::Catalog(Box::new(c))),
+                _ => None,
+            }
+        }
+    }
+
+    impl InMemoryDb {
+        /// Records this database applied from other clusters.
+        pub fn applied(&self) -> usize {
+            self.lock().applied
+        }
+
+        /// Feed entries (any origin) — "did anything new get written?"
+        pub fn feed_seq(&self) -> u64 {
+            self.lock().seq
+        }
+
+        /// Every session aggregate, sorted (for convergence checks).
+        pub fn session_aggregates(&self) -> Vec<SessionAggregate> {
+            let s = self.lock();
+            let mut ids: Vec<Uuid> = s.sessions.keys().copied().collect();
+            ids.sort();
+            ids.into_iter().filter_map(|id| s.aggregate(id)).collect()
+        }
+
+        /// Stored account snapshot (for assertions).
+        pub fn account(&self, user_id: Uuid) -> Option<AccountSnapshot> {
+            self.lock().accounts.get(&user_id).cloned()
+        }
+
+        /// Number of stored users (session stores have none).
+        pub fn user_count(&self) -> usize {
+            self.lock().users.len()
+        }
+
+        pub fn has_session(&self, id: Uuid) -> bool {
+            self.lock().sessions.contains_key(&id)
+        }
+    }
+
+    #[async_trait]
+    impl SyncStore for InMemoryDb {
+        async fn site_id(&self) -> Result<SiteId, AuthError> {
+            let mut s = self.lock();
+            Ok(SiteId(*s.site_id.get_or_insert_with(Uuid::new_v4)))
+        }
+
+        async fn head(&self) -> Result<FeedCursor, AuthError> {
+            Ok(FeedCursor {
+                txid: 0,
+                seq: self.lock().seq,
+            })
+        }
+
+        async fn changes_since(
+            &self,
+            after: FeedCursor,
+            limit: u32,
+        ) -> Result<ChangePage, AuthError> {
+            let site = self.site_id().await?;
+            let s = self.lock();
+            let mut entries: Vec<(u64, &(&'static str, String))> = s
+                .feed
+                .iter()
+                .filter(|(_, seq)| **seq > after.seq)
+                .map(|(k, seq)| (*seq, k))
+                .collect();
+            entries.sort_by_key(|(seq, _)| *seq);
+            let more = entries.len() > limit as usize;
+            entries.truncate(limit as usize);
+            let next = entries
+                .last()
+                .map(|(seq, _)| FeedCursor { txid: 0, seq: *seq })
+                .unwrap_or(after);
+            let records = entries
+                .iter()
+                .filter_map(|(_, (kind, key))| s.record(kind, key))
+                .collect();
+            Ok(ChangePage {
+                site,
+                records,
+                next,
+                more,
+            })
+        }
+
+        async fn load_session(
+            &self,
+            id: Uuid,
+        ) -> Result<Option<(SessionAggregate, u64)>, AuthError> {
+            let s = self.lock();
+            Ok(s.aggregate(id)
+                .map(|a| (a, s.session_revs.get(&id).copied().unwrap_or(0))))
+        }
+
+        async fn store_session(
+            &self,
+            merged: &SessionAggregate,
+            expected: Option<u64>,
+        ) -> Result<ApplyOutcome, AuthError> {
+            let id = merged.session.id;
+            let mut s = self.lock();
+            let current = s
+                .sessions
+                .contains_key(&id)
+                .then(|| s.session_revs.get(&id).copied().unwrap_or(0));
+            if current != expected {
+                return Ok(ApplyOutcome::Conflict);
+            }
+            if s.aggregate(id).as_ref() == Some(merged) {
+                return Ok(ApplyOutcome::Unchanged);
+            }
+            let stored = merged.stored_generations();
+            s.sessions.insert(id, merged.to_session());
+            s.generations
+                .insert(id, stored.iter().map(|(g, _)| g.clone()).collect());
+            s.alias_variants.insert(
+                id,
+                stored
+                    .iter()
+                    .flat_map(|(g, aliases)| aliases.iter().map(|v| (g.generation, v.clone())))
+                    .collect(),
+            );
+            s.applied += 1;
+            s.touch(FEED_SESSION, id.to_string());
+            Ok(ApplyOutcome::Applied)
+        }
+
+        async fn active_session_ids(&self, user_id: Uuid) -> Result<Vec<Uuid>, AuthError> {
+            let s = self.lock();
+            let mut ids: Vec<Uuid> = s
+                .sessions
+                .values()
+                .filter(|x| x.user_id == user_id && x.status == SessionStatus::Active)
+                .map(|x| x.id)
+                .collect();
+            ids.sort();
+            Ok(ids)
+        }
+
+        async fn merge_revocation(&self, r: &Revocation) -> Result<ApplyOutcome, AuthError> {
+            let mut s = self.lock();
+            match s.revocations.iter().position(|x| x.id == r.id) {
+                Some(i) => {
+                    let merged = merge_revocation(&s.revocations[i], r);
+                    if merged == s.revocations[i] {
+                        return Ok(ApplyOutcome::Unchanged);
+                    }
+                    s.revocations[i] = merged;
+                }
+                None => s.revocations.push(r.clone()),
+            }
+            s.applied += 1;
+            s.touch(FEED_REVOCATION, r.id.to_string());
+            Ok(ApplyOutcome::Applied)
+        }
+
+        async fn merge_key(&self, k: &VerifyingKeyRecord) -> Result<ApplyOutcome, AuthError> {
+            let mut s = self.lock();
+            let merged = match s.keys.get(&k.kid) {
+                Some(existing) => {
+                    let merged = merge_key(existing, k);
+                    if &merged == existing {
+                        return Ok(ApplyOutcome::Unchanged);
+                    }
+                    merged
+                }
+                None => k.clone(),
+            };
+            s.keys.insert(k.kid.clone(), merged);
+            s.applied += 1;
+            s.touch(FEED_KEY, k.kid.clone());
+            Ok(ApplyOutcome::Applied)
+        }
+
+        async fn apply_account(&self, a: &AccountSnapshot) -> Result<ApplyOutcome, AuthError> {
+            let mut s = self.lock();
+            if s.accounts
+                .get(&a.user_id)
+                .is_some_and(|x| x.version >= a.version)
+            {
+                return Ok(ApplyOutcome::Unchanged);
+            }
+            s.accounts.insert(a.user_id, a.clone());
+            s.applied += 1;
+            s.touch(FEED_ACCOUNT, a.user_id.to_string());
+            Ok(ApplyOutcome::Applied)
+        }
+
+        async fn load_account(&self, user_id: Uuid) -> Result<Option<AccountSnapshot>, AuthError> {
+            Ok(self.lock().accounts.get(&user_id).cloned())
+        }
+
+        async fn apply_catalog(&self, c: &CatalogSnapshot) -> Result<ApplyOutcome, AuthError> {
+            let mut s = self.lock();
+            if s.catalog_snapshot
+                .as_ref()
+                .is_some_and(|x| x.version >= c.version)
+            {
+                return Ok(ApplyOutcome::Unchanged);
+            }
+            s.catalog_snapshot = Some(c.clone());
+            s.applied += 1;
+            s.touch(FEED_CATALOG, "catalog");
+            Ok(ApplyOutcome::Applied)
+        }
+
+        async fn load_catalog(&self) -> Result<Option<CatalogSnapshot>, AuthError> {
+            Ok(self.lock().catalog_snapshot.clone())
+        }
+
+        async fn cursor(&self, site: SiteId) -> Result<FeedCursor, AuthError> {
+            Ok(self.lock().cursors.get(&site).copied().unwrap_or_default())
+        }
+
+        async fn advance_cursor(&self, site: SiteId, to: FeedCursor) -> Result<(), AuthError> {
+            let mut s = self.lock();
+            let c = s.cursors.entry(site).or_default();
+            *c = (*c).max(to);
+            Ok(())
+        }
+
+        async fn reset_cursor(&self, site: SiteId) -> Result<(), AuthError> {
+            self.lock().cursors.remove(&site);
+            Ok(())
+        }
+
+        async fn next_version(&self) -> Result<u64, AuthError> {
+            let mut s = self.lock();
+            s.versions += 1;
+            Ok(s.versions)
+        }
+
+        async fn record_caught_up(
+            &self,
+            service: &str,
+            at: DateTime<Utc>,
+        ) -> Result<(), AuthError> {
+            let mut s = self.lock();
+            let slot = s.caught_up.entry(service.to_string()).or_insert(at);
+            *slot = (*slot).max(at);
+            Ok(())
+        }
+
+        async fn caught_up_at(&self, service: &str) -> Result<Option<DateTime<Utc>>, AuthError> {
+            Ok(self.lock().caught_up.get(service).copied())
+        }
     }
 }

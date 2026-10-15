@@ -4,7 +4,7 @@
 
 mod support;
 
-use auth_lib::prelude::*;
+use z_auth::prelude::*;
 
 use crate::support::{VALID_PASSWORD, make_auth, register_request};
 
@@ -347,4 +347,68 @@ async fn test_user_debug_redacts_secrets() {
     let user = auth.users().register(full_request()).await.unwrap();
     let dbg = format!("{user:?}");
     assert!(!dbg.contains(user.password_hash.as_deref().unwrap()));
+}
+
+// ── Listing ───────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_list_pages_and_searches() {
+    let auth = make_auth();
+    for (email, username) in [
+        ("alice@example.com", Some("Alice")),
+        ("bob@example.com", Some("bobby")),
+        ("carol@other.org", None),
+    ] {
+        auth.users()
+            .register(register_request(email, username))
+            .await
+            .unwrap();
+    }
+
+    let all = auth.users().list(UserQuery::default()).await.unwrap();
+    assert_eq!(all.total, 3);
+    assert_eq!(all.items.len(), 3, "limit 0 → default page size");
+
+    let page = auth
+        .users()
+        .list(UserQuery {
+            search: None,
+            limit: 2,
+            offset: 2,
+        })
+        .await
+        .unwrap();
+    assert_eq!(page.total, 3);
+    assert_eq!(page.items.len(), 1);
+
+    let by_email = auth
+        .users()
+        .list(UserQuery {
+            search: Some("  EXAMPLE.com ".into()),
+            ..UserQuery::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(by_email.total, 2, "case-insensitive, trimmed");
+
+    let by_username = auth
+        .users()
+        .list(UserQuery {
+            search: Some("BOBB".into()),
+            ..UserQuery::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(by_username.items.len(), 1);
+    assert_eq!(by_username.items[0].email, "bob@example.com");
+
+    let blank = auth
+        .users()
+        .list(UserQuery {
+            search: Some("   ".into()),
+            ..UserQuery::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(blank.total, 3, "blank search is ignored");
 }

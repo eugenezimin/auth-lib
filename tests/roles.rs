@@ -4,7 +4,7 @@
 
 mod support;
 
-use auth_lib::prelude::*;
+use z_auth::prelude::*;
 
 use crate::support::{make_auth, new_role};
 
@@ -105,5 +105,68 @@ async fn test_create_duplicate_name_fails() {
         .create(&new_role("unique_role"))
         .await
         .expect_err("duplicate name must fail");
+    assert!(matches!(err, AuthError::RoleAlreadyExists), "got: {err:?}");
+}
+
+#[tokio::test]
+async fn test_update_renames_and_clears_description() {
+    let auth = make_auth();
+    let role = auth.roles().create(&new_role("editor")).await.unwrap();
+
+    let renamed = auth
+        .roles()
+        .update(
+            role.id,
+            &RoleUpdate {
+                name: Some("Editors".into()),
+                description: None,
+            },
+        )
+        .await
+        .unwrap()
+        .expect("role exists");
+    assert_eq!(renamed.name, "Editors");
+    assert_eq!(renamed.code, "editor", "code is immutable");
+    assert_eq!(renamed.description, role.description, "None leaves it unchanged");
+
+    let cleared = auth
+        .roles()
+        .update(
+            role.id,
+            &RoleUpdate {
+                name: None,
+                description: Some(None),
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(cleared.description.is_none());
+    assert_eq!(cleared.name, "Editors");
+}
+
+#[tokio::test]
+async fn test_update_missing_and_duplicate_name() {
+    let auth = make_auth();
+    let missing = auth
+        .roles()
+        .update(uuid::Uuid::new_v4(), &RoleUpdate::default())
+        .await
+        .unwrap();
+    assert!(missing.is_none());
+
+    auth.roles().create(&new_role("taken")).await.unwrap();
+    let other = auth.roles().create(&new_role("other")).await.unwrap();
+    let err = auth
+        .roles()
+        .update(
+            other.id,
+            &RoleUpdate {
+                name: Some("taken".into()),
+                description: None,
+            },
+        )
+        .await
+        .unwrap_err();
     assert!(matches!(err, AuthError::RoleAlreadyExists), "got: {err:?}");
 }

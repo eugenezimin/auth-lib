@@ -17,7 +17,7 @@ mod support;
 use std::sync::Arc;
 use std::time::Duration;
 
-use auth_lib::prelude::*;
+use z_auth::prelude::*;
 
 use crate::support::{
     IP_A, IP_B, InMemoryDb, MockClock, credentials, ctx, raw_config, register_and_login, server,
@@ -209,6 +209,100 @@ async fn previous_pair_from_another_ip_within_grace_is_reuse() {
 
     let err = refresh(&s, &first, IP_B).await.unwrap_err();
     assert!(matches!(err, AuthError::SessionCompromised), "{err:?}");
+}
+
+#[tokio::test]
+async fn grace_can_match_on_the_client_fingerprint_instead_of_the_ip() {
+    let config = raw_config()
+        .refresh_retry_match("fingerprint")
+        .build()
+        .unwrap();
+    let s = server(config);
+    let device = |ip| ctx(ip).with_fingerprint("device-123");
+    support::register(&s.auth, "a@example.com").await;
+    let first = s
+        .auth
+        .authentication()
+        .login(credentials("a@example.com"), device(IP_A))
+        .await
+        .unwrap();
+    s.clock.advance(ACCESS_TTL);
+    let winner = s
+        .auth
+        .authentication()
+        .refresh(&first.access_token, &first.refresh_token, device(IP_A))
+        .await
+        .unwrap();
+    // The same device retries from another network: still a retry.
+    let retry = s
+        .auth
+        .authentication()
+        .refresh(&first.access_token, &first.refresh_token, device(IP_B))
+        .await
+        .expect("same fingerprint");
+    assert_eq!(retry, winner);
+
+    // Another device (or none) with the old pair is reuse.
+    let err = s
+        .auth
+        .authentication()
+        .refresh(
+            &first.access_token,
+            &first.refresh_token,
+            ctx(IP_A).with_fingerprint("other-device"),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(err, AuthError::SessionCompromised), "{err:?}");
+}
+
+#[tokio::test]
+async fn generations_record_who_they_were_issued_to() {
+    let s = server(test_config());
+    support::register(&s.auth, "a@example.com").await;
+    let first = s
+        .auth
+        .authentication()
+        .login(
+            credentials("a@example.com"),
+            ctx(IP_A).with_fingerprint("device-123"),
+        )
+        .await
+        .unwrap();
+    s.clock.advance(ACCESS_TTL);
+    let second = s
+        .auth
+        .authentication()
+        .refresh(
+            &first.access_token,
+            &first.refresh_token,
+            ctx(IP_B).with_fingerprint("device-123"),
+        )
+        .await
+        .unwrap();
+    s.auth.verifier().verify(&second.access_token).unwrap();
+    let g1 = SessionRepository::find_generation(s.db.as_ref(), first.session_id, 1)
+        .await
+        .unwrap()
+        .unwrap();
+    let g2 = SessionRepository::find_generation(s.db.as_ref(), first.session_id, 2)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(g1.parent_jti, None);
+    assert_eq!(g2.parent_jti, Some(g1.access_jti));
+    assert_eq!(g2.issued_ip, IP_B);
+    assert_eq!(g2.issued_user_agent.as_deref(), Some("test-agent"));
+    assert!(g1.fingerprint_hash.is_some());
+    assert_eq!(
+        g1.fingerprint_hash, g2.fingerprint_hash,
+        "hashed, same device"
+    );
+    assert_ne!(
+        g1.fingerprint_hash.unwrap().to_vec(),
+        b"device-123".to_vec(),
+        "never stored in clear"
+    );
 }
 
 #[tokio::test]
@@ -622,10 +716,7 @@ async fn long_user_agent_is_truncated_on_a_char_boundary() {
         .authentication()
         .login(
             credentials("a@example.com"),
-            ClientContext {
-                ip: IP_A,
-                user_agent: Some("€".repeat(400)),
-            },
+            ClientContext::new(IP_A).with_user_agent("€".repeat(400)),
         )
         .await
         .unwrap();
