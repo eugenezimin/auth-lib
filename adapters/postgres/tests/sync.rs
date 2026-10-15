@@ -114,13 +114,52 @@ async fn test_feed_pages_and_captures_writes() {
     })
     .await;
     assert!(end > start);
-    assert!(store.head().await.unwrap() >= end);
+    // Not `>= end`: a feed row moves when its record changes again, so
+    // while another test holds a transaction open, the newest row can be
+    // hidden and head can sit behind a position already read.  Our own
+    // rows stay put and are visible, so head is past them.
+    assert!(store.head().await.unwrap() > start);
     // Pages of two.
     let first = store.changes_since(start, 2).await.unwrap();
     assert_eq!(first.site, site);
     assert!(first.records.len() <= 2);
     assert!(first.more);
     let _ = records;
+}
+
+#[tokio::test]
+async fn test_feed_orders_transaction_ids_numerically() {
+    // A fresh schema, so its feed holds only the rows below.
+    let schema = format!("feed_order_{}", Uuid::new_v4().simple());
+    let remote_pool = session_store_pool(&schema).await;
+    let store = PgSyncStore::new(remote_pool.clone());
+    store.site_id().await.unwrap();
+    // Transaction ids 9 and 10: as text, '9' sorts after '10'.
+    for (txid, seq) in [(9_i64, 1_i64), (10, 2)] {
+        sqlx::query(
+            "INSERT INTO cluster_change_feed (kind, key, seq, txid)
+             VALUES ('revocation', $1, $2, $3::text::xid8)",
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(seq)
+        .bind(txid.to_string())
+        .execute(&remote_pool)
+        .await
+        .unwrap();
+    }
+
+    assert_eq!(store.head().await.unwrap(), FeedCursor { txid: 10, seq: 2 });
+    let page = store.changes_since(FeedCursor::default(), 1).await.unwrap();
+    assert_eq!(page.next, FeedCursor { txid: 9, seq: 1 });
+    assert!(page.more);
+    let page = store.changes_since(page.next, 1).await.unwrap();
+    assert_eq!(page.next, FeedCursor { txid: 10, seq: 2 });
+    assert!(!page.more);
+
+    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+        .execute(&pool().await)
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -169,7 +208,12 @@ async fn test_merges_write_only_when_something_changes() {
         .insert(&new_revocation())
         .await
         .unwrap();
-    let (_, cursor) = drain(&store, FeedCursor::default()).await;
+    // Wait for the insert itself: another test's open transaction can hold
+    // the feed back, and it must not surface in the no-op check below.
+    let (_, cursor) = drain_until(&store, FeedCursor::default(), |r| {
+        has_revocation(r, stored.id)
+    })
+    .await;
 
     assert_eq!(
         store.merge_revocation(&stored).await.unwrap(),
@@ -290,22 +334,13 @@ async fn test_session_round_trip_cas_and_session_store_schema() {
         snapshot.presented.unwrap().fingerprint_hash,
         issued.fingerprint_hash
     );
-    let (feed, _) = {
-        let mut all = Vec::new();
-        let mut after = FeedCursor::default();
-        loop {
-            let page = remote.changes_since(after, 50).await.unwrap();
-            all.extend(page.records);
-            after = page.next;
-            if !page.more {
-                break (all, after);
-            }
-        }
-    };
-    assert!(
-        feed.iter()
+    // The copy enters the store's own feed (once no other transaction holds
+    // the feed back).
+    drain_until(&remote, FeedCursor::default(), |r| {
+        r.iter()
             .any(|r| matches!(r, SyncRecord::Session(a) if a.session.id == sid))
-    );
+    })
+    .await;
     let _ = remote_rev;
 
     // The authority drops sessions of users it deleted (FK).
