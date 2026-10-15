@@ -12,6 +12,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::time::Duration;
 
+use uuid::Uuid;
 use z_auth::identity::user::{RegisterUser, UpdateUser};
 use z_auth::security::authentication::{ClientContext, Credentials};
 use z_auth::security::session::RevocationReason;
@@ -20,7 +21,6 @@ use z_auth::security::session::{
 };
 use z_auth::security::token::{NewRevocation, Revocation, RevocationRepository, RevocationScope};
 use z_auth_postgres::{PgRevocationRepository, PgSessionRepository};
-use uuid::Uuid;
 
 use crate::helpers::{cleanup_user_by_id, create_test_user, make_service, pool, unique_email};
 
@@ -46,9 +46,7 @@ fn lifetimes(history_size: u32) -> SessionLifetimes {
     }
 }
 
-async fn login(
-    service: &z_auth::ZAuth,
-) -> (Uuid, z_auth::security::authentication::TokenPair) {
+async fn login(service: &z_auth::ZAuth) -> (Uuid, z_auth::security::authentication::TokenPair) {
     let email = unique_email("session");
     let user = create_test_user(
         service,

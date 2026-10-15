@@ -97,7 +97,10 @@ impl PermissionServiceImpl {
         let mut views: Vec<GrantView> = assignments
             .iter()
             .filter_map(|a| {
-                let permission = catalog.permissions.iter().find(|p| p.id == a.permission_id)?;
+                let permission = catalog
+                    .permissions
+                    .iter()
+                    .find(|p| p.id == a.permission_id)?;
                 Some(GrantView {
                     permission_code: permission.code.clone(),
                     value: value_of(permission, a)?,

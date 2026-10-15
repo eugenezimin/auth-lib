@@ -4,12 +4,12 @@
 //! `sqlx::query_as` API so no `DATABASE_URL` is required at compile time.
 
 use async_trait::async_trait;
+use sqlx::PgPool;
+use uuid::Uuid;
 use z_auth::AuthError;
 use z_auth::identity::user::{
     NewUser, User, UserPage, UserQuery, UserRepository, UserUpdate, UserWithRoles,
 };
-use sqlx::PgPool;
-use uuid::Uuid;
 
 use crate::errors::map_sqlx_error;
 use crate::queries::user_queries;

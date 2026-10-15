@@ -8,6 +8,10 @@
 use std::net::IpAddr;
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
+use sqlx::types::Json;
+use sqlx::{PgPool, Postgres, Transaction};
+use uuid::Uuid;
 use z_auth::AuthError;
 use z_auth::security::session::{Session, SessionGeneration};
 use z_auth::security::token::{Revocation, RevocationScope, VerifyingKeyRecord};
@@ -15,10 +19,6 @@ use z_auth_cluster::federation::{
     AccountSnapshot, ApplyOutcome, CatalogSnapshot, ChangePage, FeedCursor, GenerationVariant,
     SessionAggregate, SiteId, SyncRecord, SyncStore, merge_key, merge_revocation,
 };
-use chrono::{DateTime, Utc};
-use sqlx::types::Json;
-use sqlx::{PgPool, Postgres, Transaction};
-use uuid::Uuid;
 
 use crate::codes::to_db_generation;
 use crate::enums::{

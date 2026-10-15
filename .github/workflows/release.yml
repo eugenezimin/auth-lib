@@ -1,0 +1,99 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Check the tag matches the crate version
+        shell: bash
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "z-auth") | .version')
+          if [ "$GITHUB_REF_NAME" != "v$version" ] && [[ "$GITHUB_REF_NAME" != "v$version-"* ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match z-auth version $version"
+            exit 1
+          fi
+
+      # Libraries, the setup_db binary (with the cluster migrations) and the
+      # keygen example, all features on.
+      - name: Release build
+        run: cargo build --release --target ${{ matrix.target }} --workspace --all-features --lib --bins --examples
+
+      - name: Package
+        shell: bash
+        run: |
+          name="z-auth-$GITHUB_REF_NAME-${{ matrix.target }}"
+          out="target/${{ matrix.target }}/release"
+          mkdir -p "dist/$name"
+          cp "$out/setup_db" "$out/examples/keygen" README.md env.example "dist/$name/"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          (cd dist && shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256")
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: z-auth-${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: z-auth-*
+          path: dist
+          merge-multiple: true
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          flags=(--repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes --title "z-auth $GITHUB_REF_NAME")
+          # v1.2.0-rc.1 and the like are pre-releases.
+          if [[ "$GITHUB_REF_NAME" == *-* ]]; then flags+=(--prerelease); fi
+          gh release create "$GITHUB_REF_NAME" "${flags[@]}" dist/*
+
+      - name: Write summary
+        run: |
+          {
+            echo "## Released $GITHUB_REF_NAME"
+            echo
+            echo "https://github.com/$GITHUB_REPOSITORY/releases/tag/$GITHUB_REF_NAME"
+            echo
+            echo '| Asset | SHA-256 |'
+            echo '|---|---|'
+            for f in dist/*.sha256; do
+              read -r sum file < "$f"
+              echo "| \`$file\` | \`$sum\` |"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"

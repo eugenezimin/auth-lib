@@ -21,12 +21,12 @@
 use std::collections::HashSet;
 use std::io::{self, Write};
 
-#[cfg(feature = "shared")]
-use z_auth_postgres::CLUSTER_MIGRATOR;
-use z_auth_postgres::{MIGRATOR, PgConfig, constants::ADMIN_DB_NAME, pool::connect_options};
 use sqlx::PgPool;
 use sqlx::migrate::Migrator;
 use sqlx::postgres::PgPoolOptions;
+#[cfg(feature = "shared")]
+use z_auth_postgres::CLUSTER_MIGRATOR;
+use z_auth_postgres::{MIGRATOR, PgConfig, constants::ADMIN_DB_NAME, pool::connect_options};
 
 /// Every table z-auth has ever created: the current schema, the names
 /// used before the baseline (old migrations 0001–0008), and `revoked_tokens`

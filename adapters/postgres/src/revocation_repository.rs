@@ -3,10 +3,10 @@
 //! `revoked_at` / `expires_at` are stamped by the database.
 
 use async_trait::async_trait;
-use z_auth::AuthError;
-use z_auth::security::token::{NewRevocation, Revocation, RevocationRepository, RevocationScope};
 use sqlx::PgPool;
 use uuid::Uuid;
+use z_auth::AuthError;
+use z_auth::security::token::{NewRevocation, Revocation, RevocationRepository, RevocationScope};
 
 use crate::enums::{PgRevocationReason, PgRevocationScope};
 use crate::errors::map_sqlx_error;

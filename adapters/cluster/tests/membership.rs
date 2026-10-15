@@ -11,12 +11,12 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use z_auth::prelude::*;
-use z_auth_cluster::prelude::*;
 use support::cluster::*;
 use support::federation::*;
 use support::*;
 use uuid::Uuid;
+use z_auth::prelude::*;
+use z_auth_cluster::prelude::*;
 
 fn cluster_of(n: &Node) -> &Arc<FederationClusterService> {
     n.federation_cluster().expect("federation mode")

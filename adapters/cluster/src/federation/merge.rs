@@ -22,9 +22,7 @@ use crate::sync::{
 };
 use z_auth::security::session::RevocationReason;
 use z_auth::security::session::SessionStatus;
-use z_auth::security::token::model::{
-    KeyStatus, Revocation, RevocationStatus, VerifyingKeyRecord,
-};
+use z_auth::security::token::model::{KeyStatus, Revocation, RevocationStatus, VerifyingKeyRecord};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MergeParams {

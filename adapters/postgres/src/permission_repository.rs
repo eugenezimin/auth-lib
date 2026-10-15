@@ -6,13 +6,13 @@
 //! and at login / refresh (`effective_grants`) — never on token verification.
 
 use async_trait::async_trait;
+use sqlx::{PgPool, Postgres, Transaction};
+use uuid::Uuid;
 use z_auth::AuthError;
 use z_auth::security::authorization::{
     EffectiveGrants, NewPermission, Permission, PermissionAssignment, PermissionCatalog,
     PermissionGrant, PermissionKind, PermissionRepository,
 };
-use sqlx::{PgPool, Postgres, Transaction};
-use uuid::Uuid;
 
 use crate::enums::PgPermissionKind;
 use crate::errors::map_sqlx_error;
@@ -259,11 +259,17 @@ impl PermissionRepository for PgPermissionRepository {
         tx.commit().await.map_err(map_sqlx_error)
     }
 
-    async fn list_user_grants(&self, user_id: Uuid) -> Result<Vec<PermissionAssignment>, AuthError> {
+    async fn list_user_grants(
+        &self,
+        user_id: Uuid,
+    ) -> Result<Vec<PermissionAssignment>, AuthError> {
         self.list_grants(q::LIST_USER_GRANTS, user_id).await
     }
 
-    async fn list_role_grants(&self, role_id: Uuid) -> Result<Vec<PermissionAssignment>, AuthError> {
+    async fn list_role_grants(
+        &self,
+        role_id: Uuid,
+    ) -> Result<Vec<PermissionAssignment>, AuthError> {
         self.list_grants(q::LIST_ROLE_GRANTS, role_id).await
     }
 

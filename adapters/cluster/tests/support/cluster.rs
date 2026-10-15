@@ -6,11 +6,11 @@ use std::ops::Deref;
 use std::sync::{Arc, Mutex, Weak};
 
 use async_trait::async_trait;
+use uuid::Uuid;
 use z_auth::prelude::*;
 #[cfg(feature = "federation")]
 use z_auth_cluster::federation::FederationEngine;
 use z_auth_cluster::prelude::*;
-use uuid::Uuid;
 
 use crate::support::{InMemoryDb, MockClock, raw_config};
 

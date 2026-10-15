@@ -127,7 +127,10 @@ async fn test_update_renames_and_clears_description() {
         .expect("role exists");
     assert_eq!(renamed.name, "Editors");
     assert_eq!(renamed.code, "editor", "code is immutable");
-    assert_eq!(renamed.description, role.description, "None leaves it unchanged");
+    assert_eq!(
+        renamed.description, role.description,
+        "None leaves it unchanged"
+    );
 
     let cleared = auth
         .roles()

@@ -7,10 +7,10 @@ mod support;
 use std::sync::Arc;
 use std::time::Duration;
 
+use uuid::Uuid;
 use z_auth::prelude::*;
 use z_auth::security::token::RevocationStatus;
 use z_auth_cluster::prelude::*;
-use uuid::Uuid;
 
 use crate::support::cluster::{Node, cluster_node, started_cluster};
 use crate::support::{IP_A, MockClock, credentials, ctx, raw_config, register_and_login};

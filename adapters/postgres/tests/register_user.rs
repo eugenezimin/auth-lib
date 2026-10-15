@@ -433,7 +433,11 @@ async fn test_list_filters_by_substring_and_pages() {
         limit,
         offset,
     };
-    let all = service.users().list(query(&tag.to_uppercase(), 0, 0)).await.unwrap();
+    let all = service
+        .users()
+        .list(query(&tag.to_uppercase(), 0, 0))
+        .await
+        .unwrap();
     assert_eq!(all.total, 3, "case-insensitive substring");
     assert_eq!(all.items.len(), 3);
     assert_eq!(all.items[0].id, ids[2], "newest first");

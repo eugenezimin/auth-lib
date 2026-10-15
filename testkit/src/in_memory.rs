@@ -64,8 +64,7 @@ struct State {
     #[cfg(feature = "federation")]
     catalog_snapshot: Option<z_auth_cluster::federation::CatalogSnapshot>,
     #[cfg(feature = "federation")]
-    cursors:
-        HashMap<z_auth_cluster::federation::SiteId, z_auth_cluster::federation::FeedCursor>,
+    cursors: HashMap<z_auth_cluster::federation::SiteId, z_auth_cluster::federation::FeedCursor>,
     caught_up: HashMap<String, DateTime<Utc>>,
     versions: u64,
     /// Records applied from other clusters (for "no ping-pong" checks).
@@ -1227,11 +1226,17 @@ impl PermissionRepository for InMemoryDb {
         Ok(())
     }
 
-    async fn list_user_grants(&self, user_id: Uuid) -> Result<Vec<PermissionAssignment>, AuthError> {
+    async fn list_user_grants(
+        &self,
+        user_id: Uuid,
+    ) -> Result<Vec<PermissionAssignment>, AuthError> {
         Ok(State::list_grants(&self.lock().user_grants, user_id))
     }
 
-    async fn list_role_grants(&self, role_id: Uuid) -> Result<Vec<PermissionAssignment>, AuthError> {
+    async fn list_role_grants(
+        &self,
+        role_id: Uuid,
+    ) -> Result<Vec<PermissionAssignment>, AuthError> {
         Ok(State::list_grants(&self.lock().role_grants, role_id))
     }
 
