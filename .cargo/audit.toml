@@ -1,0 +1,11 @@
+# cargo-audit configuration (read from .cargo/audit.toml in the workspace).
+
+[advisories]
+ignore = [
+    # rsa: Marvin timing side channel, no fixed release.  rsa is in Cargo.lock
+    # only through sqlx-mysql, an optional dependency of sqlx-macros-core that
+    # is never enabled: z-auth-postgres turns on sqlx's `postgres` feature
+    # only, and `cargo tree -i rsa --workspace --all-features --target all`
+    # is empty.  Drop this entry if MySQL support is ever added.
+    "RUSTSEC-2023-0071",
+]
