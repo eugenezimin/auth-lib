@@ -54,8 +54,11 @@ async fn test_cluster_migrations_apply_on_top_of_the_core_set() {
 async fn test_enum_types_exist() {
     let pool = pool().await;
     let mut types: Vec<String> = sqlx::query_scalar(
+        // Only this schema: session-store schemas left behind by an
+        // interrupted sync or federation test carry the same types.
         "SELECT typname::text FROM pg_type
          WHERE typtype = 'e'
+           AND typnamespace = current_schema()::regnamespace
            AND typname IN ('session_status', 'revocation_scope', 'revocation_reason')",
     )
     .fetch_all(&pool)
