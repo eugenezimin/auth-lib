@@ -7,9 +7,7 @@
 
 use async_trait::async_trait;
 
-use crate::identity::user::model::{
-    NewUser, User, UserPage, UserQuery, UserUpdate, UserWithRoles,
-};
+use crate::identity::user::model::{NewUser, User, UserPage, UserQuery, UserUpdate, UserWithRoles};
 use crate::utils::error::AuthError;
 
 /// Persistence contract for users.

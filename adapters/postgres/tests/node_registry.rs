@@ -10,12 +10,12 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::time::Duration;
 
+use chrono::Utc;
+use uuid::Uuid;
 use z_auth_cluster::shared::{
     EvictOutcome, HeartbeatStatus, NodeInfo, NodeRepository, NodeState, NodeTransition,
 };
 use z_auth_postgres::PgNodeRepository;
-use chrono::Utc;
-use uuid::Uuid;
 
 use crate::helpers::cluster_pool as pool;
 

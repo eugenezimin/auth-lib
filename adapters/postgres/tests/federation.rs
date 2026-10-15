@@ -13,6 +13,7 @@ use std::ops::Deref;
 use std::sync::{Arc, Mutex, Weak};
 
 use async_trait::async_trait;
+use uuid::Uuid;
 use z_auth::conf::config::{AuthConfig, RawConfig};
 use z_auth::identity::user::RegisterUser;
 use z_auth::security::authentication::{ClientContext, Credentials};
@@ -26,7 +27,6 @@ use z_auth_postgres::{
     PgKeyRepository, PgNodeRepository, PgPermissionRepository, PgRevocationRepository,
     PgSessionRepository, PgSyncStore, repositories,
 };
-use uuid::Uuid;
 
 use crate::helpers::{cluster_pool as pool, session_store_pool, unique_email};
 

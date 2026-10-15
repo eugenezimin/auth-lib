@@ -8,9 +8,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+use uuid::Uuid;
 use z_auth::prelude::*;
 use z_auth_cluster::prelude::*;
-use uuid::Uuid;
 
 use super::cluster::{CLUSTER_SECRET, Handle, InMemoryNetwork, Node, seed};
 use super::{InMemoryDb, MockClock, raw_config, repositories};

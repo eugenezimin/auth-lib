@@ -3,12 +3,12 @@
 //! [`node_queries`](super::node_queries).
 
 use async_trait::async_trait;
+use sqlx::PgPool;
+use uuid::Uuid;
 use z_auth::AuthError;
 use z_auth_cluster::shared::{
     EvictOutcome, NodeInfo, NodeRecord, NodeRepository, NodeState, NodeTransition,
 };
-use sqlx::PgPool;
-use uuid::Uuid;
 
 use super::node_queries as q;
 use super::node_row::{NodeRow, PgHeartbeatStatus, PgNodeState};

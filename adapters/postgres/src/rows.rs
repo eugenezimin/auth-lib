@@ -5,6 +5,8 @@
 
 use std::net::IpAddr;
 
+use chrono::{DateTime, Utc};
+use uuid::Uuid;
 use z_auth::AuthError;
 use z_auth::identity::access::{Role, UserRole};
 use z_auth::identity::user::{User, UserWithRoles};
@@ -13,8 +15,6 @@ use z_auth::security::authorization::{
 };
 use z_auth::security::session::{RefreshSnapshot, Session, SessionGeneration};
 use z_auth::security::token::{Revocation, RevocationScope, VerifyingKeyRecord};
-use chrono::{DateTime, Utc};
-use uuid::Uuid;
 
 use crate::codes::from_db_generation;
 use crate::enums::{

@@ -21,8 +21,8 @@ use uuid::Uuid;
 use crate::conf::config::PasswordPolicy;
 use crate::identity::credentials::{PasswordHasher, validate_password};
 use crate::identity::user::model::{
-    DEFAULT_USER_PAGE, MAX_USER_PAGE, NewUser, RegisterUser, UpdateUser, User, UserPage,
-    UserQuery, UserUpdate, UserWithRoles,
+    DEFAULT_USER_PAGE, MAX_USER_PAGE, NewUser, RegisterUser, UpdateUser, User, UserPage, UserQuery,
+    UserUpdate, UserWithRoles,
 };
 use crate::identity::user::repository::UserRepository;
 use crate::identity::user::service::UserService;

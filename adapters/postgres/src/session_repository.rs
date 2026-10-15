@@ -9,14 +9,14 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
+use sqlx::{PgPool, Postgres, Transaction};
+use uuid::Uuid;
 use z_auth::AuthError;
 use z_auth::security::session::RevocationReason;
 use z_auth::security::session::{
     IssueContext, NewSession, RefreshSnapshot, RotateOutcome, Session, SessionGeneration,
     SessionLifetimes, SessionRepository, SessionStatus,
 };
-use sqlx::{PgPool, Postgres, Transaction};
-use uuid::Uuid;
 
 use crate::codes::to_db_generation;
 use crate::enums::{PgRevocationReason, PgSessionStatus};

@@ -60,11 +60,13 @@ pub trait PermissionRepository: Send + Sync {
 
     /// The user's **direct** grants, one assignment per permission (option
     /// ids sorted), ordered by permission id.
-    async fn list_user_grants(&self, user_id: Uuid) -> Result<Vec<PermissionAssignment>, AuthError>;
+    async fn list_user_grants(&self, user_id: Uuid)
+    -> Result<Vec<PermissionAssignment>, AuthError>;
 
     /// The role's grants, one assignment per permission (option ids
     /// sorted), ordered by permission id.
-    async fn list_role_grants(&self, role_id: Uuid) -> Result<Vec<PermissionAssignment>, AuthError>;
+    async fn list_role_grants(&self, role_id: Uuid)
+    -> Result<Vec<PermissionAssignment>, AuthError>;
 
     /// The user's effective grants plus the catalog version, merged from
     /// direct grants and — when `include_role_grants` — the grants of the

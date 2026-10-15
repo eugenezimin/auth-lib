@@ -5,9 +5,7 @@ pub use crate::conf::config::{
 };
 pub use crate::controller::api::ApiError;
 pub use crate::controller::extension::{Extension, ExtensionReport};
-pub use crate::controller::facade::{
-    ZAuth, ZAuthBuilder, Repositories, StartReport, TickReport,
-};
+pub use crate::controller::facade::{Repositories, StartReport, TickReport, ZAuth, ZAuthBuilder};
 pub use crate::eventing::{DomainEvent, EventPublisher};
 pub use crate::identity::access::{
     NewRole, Role, RoleRepository, RoleService, RoleUpdate, UserRole, UserRoleRepository,

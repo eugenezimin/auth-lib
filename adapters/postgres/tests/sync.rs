@@ -10,6 +10,7 @@ mod helpers;
 use std::net::{IpAddr, Ipv4Addr};
 use std::time::Duration;
 
+use uuid::Uuid;
 use z_auth::security::authentication::ClientContext;
 use z_auth::security::session::RevocationReason;
 use z_auth::security::session::{RotateOutcome, SessionLifetimes, SessionRepository};
@@ -20,7 +21,6 @@ use z_auth_cluster::federation::{
     AccountSnapshot, ApplyOutcome, FeedCursor, SessionAggregate, SiteId, SyncRecord, SyncStore,
 };
 use z_auth_postgres::{PgRevocationRepository, PgSessionRepository, PgSyncStore};
-use uuid::Uuid;
 
 use crate::helpers::{
     cleanup_user_by_id, cluster_pool as pool, create_test_user, make_service, session_store_pool,

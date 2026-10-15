@@ -10,9 +10,9 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use chrono::{DateTime, Utc};
 use z_auth::prelude::*;
 use z_auth::security::token::keys::{generate_refresh_secret, generate_signing_key};
-use chrono::{DateTime, Utc};
 
 pub use in_memory::InMemoryDb;
 

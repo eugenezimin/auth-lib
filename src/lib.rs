@@ -62,7 +62,7 @@ pub mod security;
 pub mod utils;
 
 pub use controller::extension::Extension;
-pub use controller::facade::{ZAuth, ZAuthBuilder, Repositories};
+pub use controller::facade::{Repositories, ZAuth, ZAuthBuilder};
 pub use controller::prelude;
 pub use utils::error::AuthError;
 

@@ -9,12 +9,12 @@ mod support;
 use std::sync::Arc;
 use std::time::Duration;
 
-use z_auth::prelude::*;
-use z_auth::security::authorization::PermissionKind;
-use z_auth_cluster::federation::SessionAggregate;
 use support::cluster::Node;
 use support::federation::*;
 use support::*;
+use z_auth::prelude::*;
+use z_auth::security::authorization::PermissionKind;
+use z_auth_cluster::federation::SessionAggregate;
 
 const ACCESS_TTL: Duration = Duration::from_secs(300);
 

@@ -13,13 +13,13 @@ mod helpers;
 
 use std::net::{IpAddr, Ipv4Addr};
 
+use uuid::Uuid;
 use z_auth::AuthError;
 use z_auth::ZAuth;
 use z_auth::identity::access::NewRole;
 use z_auth::identity::user::RegisterUser;
 use z_auth::security::authentication::{ClientContext, Credentials, TokenPair};
 use z_auth::security::authorization::{NewPermission, PermissionKind, PermissionValue};
-use uuid::Uuid;
 
 use crate::helpers::{cleanup_user_by_id, create_test_user, make_service_in, unique_email};
 
@@ -337,9 +337,13 @@ async fn test_direct_grants_are_listed_per_owner() {
     p.grant_to_user(user_id, &codes.upload, &PermissionValue::Text("50".into()))
         .await
         .unwrap();
-    p.grant_to_role(role.id, &codes.region, &PermissionValue::Choice("us".into()))
-        .await
-        .unwrap();
+    p.grant_to_role(
+        role.id,
+        &codes.region,
+        &PermissionValue::Choice("us".into()),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(
         p.user_grants(user_id).await.unwrap(),

@@ -485,9 +485,13 @@ async fn direct_grants_of_users_and_roles_are_listed_by_code() {
     s.auth.roles().assign(user.id, editor.id).await.unwrap();
 
     let p = s.auth.permissions();
-    p.grant_to_user(user.id, "upload.max_mb", &PermissionValue::Text("50".into()))
-        .await
-        .unwrap();
+    p.grant_to_user(
+        user.id,
+        "upload.max_mb",
+        &PermissionValue::Text("50".into()),
+    )
+    .await
+    .unwrap();
     p.grant_to_user(
         user.id,
         "reports.export",
@@ -541,7 +545,14 @@ async fn grant_listing_follows_the_mode() {
         s.auth.permissions().role_grants(uuid::Uuid::new_v4()).await,
         Err(AuthError::AuthzModeDisabled(_))
     ));
-    assert!(s.auth.permissions().user_grants(uuid::Uuid::new_v4()).await.unwrap().is_empty());
+    assert!(
+        s.auth
+            .permissions()
+            .user_grants(uuid::Uuid::new_v4())
+            .await
+            .unwrap()
+            .is_empty()
+    );
 
     let s = server(config("rbac"));
     assert!(matches!(

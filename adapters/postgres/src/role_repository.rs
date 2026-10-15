@@ -3,10 +3,10 @@
 //! All SQL lives in [`crate::queries::role_queries`].
 
 use async_trait::async_trait;
-use z_auth::AuthError;
-use z_auth::identity::access::{NewRole, Role, RoleRepository, RoleUpdate};
 use sqlx::PgPool;
 use uuid::Uuid;
+use z_auth::AuthError;
+use z_auth::identity::access::{NewRole, Role, RoleRepository, RoleUpdate};
 
 use crate::errors::map_sqlx_error;
 use crate::queries::role_queries;

@@ -154,7 +154,10 @@ mod tests {
                 permission(PermissionKind::Text { max_length: 8 }, &[]),
                 PermissionValue::Text("50".into()),
             ),
-            (permission(PermissionKind::Bool, &[]), PermissionValue::Allow),
+            (
+                permission(PermissionKind::Bool, &[]),
+                PermissionValue::Allow,
+            ),
         ] {
             let a = assignment_for(&p, &value).unwrap();
             assert_eq!(value_of(&p, &a), Some(value));

@@ -2,9 +2,9 @@
 //! keys.  All SQL lives in [`crate::queries::key_queries`].
 
 use async_trait::async_trait;
+use sqlx::PgPool;
 use z_auth::AuthError;
 use z_auth::security::token::{KeyRepository, NewVerifyingKey, VerifyingKeyRecord};
-use sqlx::PgPool;
 
 use crate::errors::map_sqlx_error;
 use crate::queries::key_queries as q;

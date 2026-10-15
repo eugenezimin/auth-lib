@@ -8,8 +8,8 @@ pub mod sessions;
 pub mod validation;
 
 pub use model::{
-    DEFAULT_USER_PAGE, MAX_USER_PAGE, NewUser, RegisterUser, UpdateUser, User, UserPage,
-    UserQuery, UserUpdate, UserWithRoles,
+    DEFAULT_USER_PAGE, MAX_USER_PAGE, NewUser, RegisterUser, UpdateUser, User, UserPage, UserQuery,
+    UserUpdate, UserWithRoles,
 };
 pub use repository::UserRepository;
 pub use service::UserService;

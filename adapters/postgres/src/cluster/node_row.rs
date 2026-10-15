@@ -3,10 +3,10 @@
 
 use std::net::IpAddr;
 
-use z_auth::AuthError;
-use z_auth_cluster::shared::{HeartbeatStatus, NodeInfo, NodeRecord, NodeState};
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
+use z_auth::AuthError;
+use z_auth_cluster::shared::{HeartbeatStatus, NodeInfo, NodeRecord, NodeState};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type)]
 #[sqlx(type_name = "node_state", rename_all = "snake_case")]

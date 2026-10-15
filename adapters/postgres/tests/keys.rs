@@ -10,13 +10,13 @@ mod helpers;
 use std::sync::Arc;
 use std::time::Duration;
 
+use uuid::Uuid;
 use z_auth::security::session::RevocationReason;
 use z_auth::security::token::{
     KeyRepository, KeyStatus, NewRevocation, NewVerifyingKey, RevocationRepository,
     RevocationScope, RevocationStatus,
 };
 use z_auth_postgres::{PgKeyRepository, PgRevocationRepository};
-use uuid::Uuid;
 
 use crate::helpers::pool;
 
