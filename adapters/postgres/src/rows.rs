@@ -1,24 +1,25 @@
 //! Private row types — the only place sqlx's `FromRow` meets the domain.
 //!
-//! Domain models in auth-lib carry no persistence derives; each row struct
+//! Domain models in z-auth carry no persistence derives; each row struct
 //! here maps 1-to-1 to a query's columns and converts into its domain type.
 
 use std::net::IpAddr;
 
-use auth_lib::AuthError;
-use auth_lib::access::{Role, UserRole};
-use auth_lib::authentication::{RefreshSnapshot, Session, SessionGeneration};
-use auth_lib::authorization::{Permission, PermissionGrant, PermissionKind, PermissionOption};
-use auth_lib::cluster::{NodeInfo, NodeRecord};
-use auth_lib::token::{Revocation, RevocationScope, VerifyingKeyRecord};
-use auth_lib::user::{User, UserWithRoles};
+use z_auth::AuthError;
+use z_auth::identity::access::{Role, UserRole};
+use z_auth::identity::user::{User, UserWithRoles};
+use z_auth::security::authorization::{
+    Permission, PermissionGrant, PermissionKind, PermissionOption,
+};
+use z_auth::security::session::{RefreshSnapshot, Session, SessionGeneration};
+use z_auth::security::token::{Revocation, RevocationScope, VerifyingKeyRecord};
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use crate::codes::from_db_generation;
 use crate::enums::{
-    PgHeartbeatStatus, PgKeyStatus, PgNodeState, PgPermissionKind, PgRevocationReason,
-    PgRevocationScope, PgRevocationStatus, PgSessionStatus,
+    PgKeyStatus, PgPermissionKind, PgRevocationReason, PgRevocationScope, PgRevocationStatus,
+    PgSessionStatus,
 };
 
 #[derive(sqlx::FromRow)]
@@ -54,7 +55,7 @@ impl From<UserRow> for User {
     }
 }
 
-/// One row of a `users LEFT JOIN users_roles LEFT JOIN roles` query.
+/// One row of an `identity_users LEFT JOIN identity_role_assignments LEFT JOIN identity_roles` query.
 #[derive(sqlx::FromRow)]
 pub(crate) struct UserWithRoleRow {
     #[sqlx(flatten)]
@@ -175,7 +176,7 @@ impl TryFrom<SessionRow> for Session {
     }
 }
 
-/// A `session_generations` row; its `id` is the access token's `jti`.
+/// A `security_session_generations` row; its `id` is the access token's `jti`.
 #[derive(sqlx::FromRow)]
 pub(crate) struct GenerationRow {
     id: Uuid,
@@ -185,6 +186,19 @@ pub(crate) struct GenerationRow {
     issued_at: DateTime<Utc>,
     access_expires_at: DateTime<Utc>,
     superseded_at: Option<DateTime<Utc>>,
+    parent_jti: Option<Uuid>,
+    issued_user_agent: Option<String>,
+    fingerprint_hash: Option<Vec<u8>>,
+    aliases: Vec<Uuid>,
+}
+
+pub(crate) fn fingerprint_from_db(bytes: Option<Vec<u8>>) -> Result<Option<[u8; 32]>, AuthError> {
+    bytes
+        .map(|b| {
+            <[u8; 32]>::try_from(b.as_slice())
+                .map_err(|_| AuthError::Storage("fingerprint_hash must be 32 bytes".into()))
+        })
+        .transpose()
 }
 
 impl TryFrom<GenerationRow> for SessionGeneration {
@@ -199,6 +213,10 @@ impl TryFrom<GenerationRow> for SessionGeneration {
             issued_at: r.issued_at,
             access_expires_at: r.access_expires_at,
             superseded_at: r.superseded_at,
+            parent_jti: r.parent_jti,
+            issued_user_agent: r.issued_user_agent,
+            fingerprint_hash: fingerprint_from_db(r.fingerprint_hash)?,
+            aliases: r.aliases,
         })
     }
 }
@@ -216,27 +234,45 @@ pub(crate) struct RefreshRow {
     p_issued_at: Option<DateTime<Utc>>,
     p_access_expires_at: Option<DateTime<Utc>>,
     p_superseded_at: Option<DateTime<Utc>>,
+    p_parent_jti: Option<Uuid>,
+    p_issued_user_agent: Option<String>,
+    p_fingerprint_hash: Option<Vec<u8>>,
+    p_aliases: Vec<Uuid>,
     c_id: Option<Uuid>,
     c_generation: Option<i32>,
     c_issued_ip: Option<IpAddr>,
     c_issued_at: Option<DateTime<Utc>>,
     c_access_expires_at: Option<DateTime<Utc>>,
     c_superseded_at: Option<DateTime<Utc>>,
+    c_parent_jti: Option<Uuid>,
+    c_issued_user_agent: Option<String>,
+    c_fingerprint_hash: Option<Vec<u8>>,
+    c_aliases: Vec<Uuid>,
 }
 
-/// Assemble a LEFT-JOINed generation; `None` when the join found no row.
-fn joined_generation(
-    session_id: Uuid,
+/// The columns of one LEFT-JOINed generation.
+struct Joined {
     id: Option<Uuid>,
     generation: Option<i32>,
     issued_ip: Option<IpAddr>,
     issued_at: Option<DateTime<Utc>>,
     access_expires_at: Option<DateTime<Utc>>,
     superseded_at: Option<DateTime<Utc>>,
-) -> Result<Option<SessionGeneration>, AuthError> {
-    let (Some(id), Some(generation), Some(issued_ip), Some(issued_at), Some(access_expires_at)) =
-        (id, generation, issued_ip, issued_at, access_expires_at)
-    else {
+    parent_jti: Option<Uuid>,
+    issued_user_agent: Option<String>,
+    fingerprint_hash: Option<Vec<u8>>,
+    aliases: Vec<Uuid>,
+}
+
+/// Assemble a LEFT-JOINed generation; `None` when the join found no row.
+fn joined_generation(session_id: Uuid, j: Joined) -> Result<Option<SessionGeneration>, AuthError> {
+    let (Some(id), Some(generation), Some(issued_ip), Some(issued_at), Some(access_expires_at)) = (
+        j.id,
+        j.generation,
+        j.issued_ip,
+        j.issued_at,
+        j.access_expires_at,
+    ) else {
         return Ok(None);
     };
     GenerationRow {
@@ -246,7 +282,11 @@ fn joined_generation(
         issued_ip,
         issued_at,
         access_expires_at,
-        superseded_at,
+        superseded_at: j.superseded_at,
+        parent_jti: j.parent_jti,
+        issued_user_agent: j.issued_user_agent,
+        fingerprint_hash: j.fingerprint_hash,
+        aliases: j.aliases,
     }
     .try_into()
     .map(Some)
@@ -260,21 +300,33 @@ impl TryFrom<RefreshRow> for RefreshSnapshot {
         Ok(Self {
             presented: joined_generation(
                 session.id,
-                r.p_id,
-                r.p_generation,
-                r.p_issued_ip,
-                r.p_issued_at,
-                r.p_access_expires_at,
-                r.p_superseded_at,
+                Joined {
+                    id: r.p_id,
+                    generation: r.p_generation,
+                    issued_ip: r.p_issued_ip,
+                    issued_at: r.p_issued_at,
+                    access_expires_at: r.p_access_expires_at,
+                    superseded_at: r.p_superseded_at,
+                    parent_jti: r.p_parent_jti,
+                    issued_user_agent: r.p_issued_user_agent,
+                    fingerprint_hash: r.p_fingerprint_hash,
+                    aliases: r.p_aliases,
+                },
             )?,
             current: joined_generation(
                 session.id,
-                r.c_id,
-                r.c_generation,
-                r.c_issued_ip,
-                r.c_issued_at,
-                r.c_access_expires_at,
-                r.c_superseded_at,
+                Joined {
+                    id: r.c_id,
+                    generation: r.c_generation,
+                    issued_ip: r.c_issued_ip,
+                    issued_at: r.c_issued_at,
+                    access_expires_at: r.c_access_expires_at,
+                    superseded_at: r.c_superseded_at,
+                    parent_jti: r.c_parent_jti,
+                    issued_user_agent: r.c_issued_user_agent,
+                    fingerprint_hash: r.c_fingerprint_hash,
+                    aliases: r.c_aliases,
+                },
             )?,
             session,
             now: r.db_now,
@@ -303,56 +355,17 @@ impl From<RevocationRow> for Revocation {
             scope: match r.scope {
                 PgRevocationScope::Session => RevocationScope::Session(r.subject),
                 PgRevocationScope::User => RevocationScope::User(r.subject),
+                PgRevocationScope::Token => RevocationScope::Token(r.subject),
             },
             reason: r.reason.into(),
             status: r.status.into(),
-            // Rows written before migration 0003 have no origin.
+            // The column is nullable: rows inserted by plain SQL may have no origin.
             origin_node: r.origin_node.unwrap_or_default(),
             revoked_at: r.revoked_at,
             expires_at: r.expires_at,
             enforced_at: r.enforced_at,
             enforced_by: r.enforced_by,
         }
-    }
-}
-
-// ── Cluster ───────────────────────────────────────────────────────────────────
-
-#[derive(sqlx::FromRow)]
-pub(crate) struct NodeRow {
-    id: Uuid,
-    service: String,
-    ip: Option<IpAddr>,
-    dns_name: Option<String>,
-    port: i32,
-    version: String,
-    state: PgNodeState,
-    heartbeat: PgHeartbeatStatus,
-    started_at: DateTime<Utc>,
-    state_changed_at: DateTime<Utc>,
-    heartbeat_changed_at: DateTime<Utc>,
-}
-
-impl TryFrom<NodeRow> for NodeRecord {
-    type Error = AuthError;
-
-    fn try_from(r: NodeRow) -> Result<Self, AuthError> {
-        Ok(Self {
-            info: NodeInfo {
-                node_id: r.id,
-                service: r.service,
-                ip: r.ip,
-                dns_name: r.dns_name,
-                port: u16::try_from(r.port)
-                    .map_err(|_| AuthError::Storage("node port out of range".into()))?,
-                version: r.version,
-                started_at: r.started_at,
-            },
-            state: r.state.into(),
-            heartbeat: r.heartbeat.into(),
-            state_changed_at: r.state_changed_at,
-            heartbeat_changed_at: r.heartbeat_changed_at,
-        })
     }
 }
 

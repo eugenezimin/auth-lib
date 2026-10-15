@@ -6,7 +6,7 @@
 //!   DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME
 //!
 //! Run with:
-//!   cargo test -p auth-lib-postgres --test user_role -- --test-threads=1
+//!   cargo test -p z-auth-postgres --test user_role -- --test-threads=1
 //!
 //! `--test-threads=1` keeps tests sequential so shared DB state
 //! (users, roles) doesn't produce races between concurrent tests.
@@ -19,7 +19,7 @@
 
 mod helpers;
 
-use auth_lib::{access::NewRole, user::RegisterUser};
+use z_auth::{identity::access::NewRole, identity::user::RegisterUser};
 
 use crate::helpers::{
     cleanup_role_by_id, cleanup_user_by_id, code_of, create_test_role, create_test_user,
@@ -61,7 +61,7 @@ async fn test_assign_role_success() {
 
     assert!(assigned, "assign_role should return true on success");
 
-    // Role deletion cascades to users_roles via ON DELETE CASCADE.
+    // Role deletion cascades to identity_role_assignments via ON DELETE CASCADE.
     cleanup_role_by_id(&service, role.id)
         .await
         .expect("role cleanup failed");
@@ -292,7 +292,7 @@ async fn test_revoke_already_revoked_returns_false() {
 
 // ── Cascade / isolation tests ─────────────────────────────────────────────────
 
-/// Deleting a user cascades to users_roles — the user (and its assignments)
+/// Deleting a user cascades to identity_role_assignments — the user (and its assignments)
 /// disappear without a foreign-key violation.
 #[tokio::test]
 async fn test_user_deletion_cascades_to_assignments() {
@@ -325,7 +325,7 @@ async fn test_user_deletion_cascades_to_assignments() {
         .expect("role cleanup failed");
 }
 
-/// Deleting a role cascades to users_roles — the assignment disappears and
+/// Deleting a role cascades to identity_role_assignments — the assignment disappears and
 /// the user still exists with an empty role list.
 #[tokio::test]
 async fn test_role_deletion_cascades_to_assignments() {

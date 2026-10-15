@@ -2,12 +2,12 @@
 //! catalog and user / role grants.  All SQL lives in
 //! [`crate::queries::permission_queries`].
 //!
-//! Called by auth-lib only for admin operations, at startup (catalog load)
+//! Called by z-auth only for admin operations, at startup (catalog load)
 //! and at login / refresh (`effective_grants`) — never on token verification.
 
 use async_trait::async_trait;
-use auth_lib::AuthError;
-use auth_lib::authorization::{
+use z_auth::AuthError;
+use z_auth::security::authorization::{
     EffectiveGrants, NewPermission, Permission, PermissionAssignment, PermissionCatalog,
     PermissionGrant, PermissionKind, PermissionRepository,
 };
@@ -54,6 +54,36 @@ impl PgPermissionRepository {
         self.with_options(row)
             .await?
             .ok_or(AuthError::PermissionNotFound)
+    }
+
+    /// An owner's grant rows (ordered by permission), folded into one
+    /// assignment per permission.
+    async fn list_grants(
+        &self,
+        sql: &str,
+        owner: Uuid,
+    ) -> Result<Vec<PermissionAssignment>, AuthError> {
+        let rows: Vec<(Uuid, Option<Uuid>, Option<String>)> = sqlx::query_as(sql)
+            .bind(owner)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(map_sqlx_error)?;
+        let mut assignments: Vec<PermissionAssignment> = Vec::new();
+        for (permission_id, option_id, text) in rows {
+            let assignment = match assignments.last_mut() {
+                Some(last) if last.permission_id == permission_id => last,
+                _ => {
+                    assignments.push(PermissionAssignment {
+                        permission_id,
+                        option_ids: Vec::new(),
+                        text,
+                    });
+                    assignments.last_mut().expect("just pushed")
+                }
+            };
+            assignment.option_ids.extend(option_id);
+        }
+        Ok(assignments)
     }
 }
 
@@ -227,6 +257,14 @@ impl PermissionRepository for PgPermissionRepository {
         )
         .await?;
         tx.commit().await.map_err(map_sqlx_error)
+    }
+
+    async fn list_user_grants(&self, user_id: Uuid) -> Result<Vec<PermissionAssignment>, AuthError> {
+        self.list_grants(q::LIST_USER_GRANTS, user_id).await
+    }
+
+    async fn list_role_grants(&self, role_id: Uuid) -> Result<Vec<PermissionAssignment>, AuthError> {
+        self.list_grants(q::LIST_ROLE_GRANTS, role_id).await
     }
 
     async fn clear_role_grant(

@@ -6,16 +6,15 @@
 //! on `current_generation`, so concurrent refreshes of one session are
 //! settled by the row lock (the loser gets [`RotateOutcome::Conflict`]).
 
-use std::net::IpAddr;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use auth_lib::AuthError;
-use auth_lib::authentication::{
-    NewSession, RefreshSnapshot, RotateOutcome, Session, SessionGeneration, SessionLifetimes,
-    SessionRepository, SessionStatus,
+use z_auth::AuthError;
+use z_auth::security::session::RevocationReason;
+use z_auth::security::session::{
+    IssueContext, NewSession, RefreshSnapshot, RotateOutcome, Session, SessionGeneration,
+    SessionLifetimes, SessionRepository, SessionStatus,
 };
-use auth_lib::token::RevocationReason;
 use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
@@ -40,14 +39,17 @@ async fn insert_generation(
     tx: &mut Transaction<'_, Postgres>,
     session_id: Uuid,
     generation: i32,
-    issued_ip: IpAddr,
+    issued: &IssueContext,
     access_ttl: Duration,
 ) -> Result<SessionGeneration, AuthError> {
     let row: GenerationRow = sqlx::query_as(session_queries::INSERT_GENERATION)
         .bind(session_id)
         .bind(generation)
-        .bind(issued_ip)
+        .bind(issued.ip)
         .bind(access_ttl)
+        .bind(issued.parent_jti)
+        .bind(&issued.user_agent)
+        .bind(issued.fingerprint_hash.map(|h| h.to_vec()))
         .fetch_one(&mut **tx)
         .await
         .map_err(map_sqlx_error)?;
@@ -61,6 +63,7 @@ impl SessionRepository for PgSessionRepository {
         session: NewSession,
         lifetimes: &SessionLifetimes,
     ) -> Result<(Session, SessionGeneration), AuthError> {
+        let new_fingerprint = session.fingerprint_hash;
         let mut tx = self.pool.begin().await.map_err(map_sqlx_error)?;
         let row: SessionRow = sqlx::query_as(session_queries::INSERT_SESSION)
             .bind(session.user_id)
@@ -77,7 +80,12 @@ impl SessionRepository for PgSessionRepository {
             &mut tx,
             session.id,
             to_db_generation(session.current_generation)?,
-            session.created_ip,
+            &IssueContext {
+                ip: session.created_ip,
+                user_agent: session.user_agent.clone(),
+                fingerprint_hash: new_fingerprint,
+                parent_jti: None,
+            },
             lifetimes.access_ttl,
         )
         .await?;
@@ -126,7 +134,7 @@ impl SessionRepository for PgSessionRepository {
         &self,
         session_id: Uuid,
         expected_generation: u32,
-        issued_ip: IpAddr,
+        issued: &IssueContext,
         lifetimes: &SessionLifetimes,
     ) -> Result<RotateOutcome, AuthError> {
         let expected = to_db_generation(expected_generation)?;
@@ -152,13 +160,19 @@ impl SessionRepository for PgSessionRepository {
             .await
             .map_err(map_sqlx_error)?;
         let generation =
-            insert_generation(&mut tx, session_id, newest, issued_ip, lifetimes.access_ttl).await?;
-        sqlx::query(session_queries::TRIM_GENERATIONS)
-            .bind(session_id)
-            .bind(newest.saturating_sub(lifetimes.history_size as i32))
-            .execute(&mut *tx)
-            .await
-            .map_err(map_sqlx_error)?;
+            insert_generation(&mut tx, session_id, newest, issued, lifetimes.access_ttl).await?;
+        let oldest_dropped = newest.saturating_sub(lifetimes.history_size as i32);
+        for trim in [
+            session_queries::TRIM_GENERATIONS,
+            session_queries::TRIM_ALIASES,
+        ] {
+            sqlx::query(trim)
+                .bind(session_id)
+                .bind(oldest_dropped)
+                .execute(&mut *tx)
+                .await
+                .map_err(map_sqlx_error)?;
+        }
 
         tx.commit().await.map_err(map_sqlx_error)?;
         Ok(RotateOutcome::Rotated {

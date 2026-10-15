@@ -4,12 +4,12 @@
 
 mod support;
 
-use auth_lib::api::dto::{
+use z_auth::conf::constants::*;
+use z_auth::controller::api::dto::{
     LoginRequest, RefreshRequest, RegisterRequest, RevokeRequest, RevokeTargetDto,
 };
-use auth_lib::api::{ApiError, handlers};
-use auth_lib::constants::*;
-use auth_lib::prelude::*;
+use z_auth::controller::api::{ApiError, handlers};
+use z_auth::prelude::*;
 
 use crate::support::{IP_A, VALID_PASSWORD, ctx, make_auth, register_and_login};
 

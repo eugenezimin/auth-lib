@@ -14,7 +14,7 @@ mod support;
 
 use std::sync::Arc;
 
-use auth_lib::prelude::*;
+use z_auth::prelude::*;
 
 use crate::support::{
     IP_A, InMemoryDb, MockClock, credentials, ctx, raw_config, register_and_login, server,
@@ -462,7 +462,7 @@ async fn none_mode_issues_identity_only_tokens() {
 async fn permission_modes_require_a_permission_repository() {
     let clock = MockClock::new();
     let db = Arc::new(InMemoryDb::new(clock));
-    let err = AuthLib::builder(config("combined"), support::repositories(&db))
+    let err = ZAuth::builder(config("combined"), support::repositories(&db))
         .build()
         .err()
         .expect("must fail without .permissions(...)");
@@ -472,4 +472,80 @@ async fn permission_modes_require_a_permission_repository() {
 #[test]
 fn unknown_mode_is_a_config_error() {
     assert!(raw_config().authz_mode("everything").build().is_err());
+}
+
+// ── Grant listing ─────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn direct_grants_of_users_and_roles_are_listed_by_code() {
+    let s = server(config("combined"));
+    demo_catalog(&s).await;
+    let editor = role(&s, "editor").await;
+    let (user, _) = register_and_login(&s.auth, "a@example.com", IP_A).await;
+    s.auth.roles().assign(user.id, editor.id).await.unwrap();
+
+    let p = s.auth.permissions();
+    p.grant_to_user(user.id, "upload.max_mb", &PermissionValue::Text("50".into()))
+        .await
+        .unwrap();
+    p.grant_to_user(
+        user.id,
+        "reports.export",
+        &PermissionValue::Choices(vec!["xlsx".into(), "csv".into()]),
+    )
+    .await
+    .unwrap();
+    p.grant_to_role(editor.id, "reports.view", &PermissionValue::Allow)
+        .await
+        .unwrap();
+    p.grant_to_role(editor.id, "region", &PermissionValue::Choice("eu".into()))
+        .await
+        .unwrap();
+
+    let user_grants = p.user_grants(user.id).await.unwrap();
+    assert_eq!(
+        user_grants,
+        [
+            GrantView {
+                permission_code: "reports.export".into(),
+                value: PermissionValue::Choices(vec!["csv".into(), "xlsx".into()]),
+            },
+            GrantView {
+                permission_code: "upload.max_mb".into(),
+                value: PermissionValue::Text("50".into()),
+            },
+        ],
+        "direct grants only, sorted by code"
+    );
+
+    let role_grants = p.role_grants(editor.id).await.unwrap();
+    assert_eq!(
+        role_grants
+            .iter()
+            .map(|g| (g.permission_code.as_str(), &g.value))
+            .collect::<Vec<_>>(),
+        [
+            ("region", &PermissionValue::Choice("eu".into())),
+            ("reports.view", &PermissionValue::Allow),
+        ]
+    );
+
+    p.revoke_from_user(user.id, "upload.max_mb").await.unwrap();
+    assert_eq!(p.user_grants(user.id).await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn grant_listing_follows_the_mode() {
+    let s = server(config("permissions"));
+    assert!(matches!(
+        s.auth.permissions().role_grants(uuid::Uuid::new_v4()).await,
+        Err(AuthError::AuthzModeDisabled(_))
+    ));
+    assert!(s.auth.permissions().user_grants(uuid::Uuid::new_v4()).await.unwrap().is_empty());
+
+    let s = server(config("rbac"));
+    assert!(matches!(
+        s.auth.permissions().user_grants(uuid::Uuid::new_v4()).await,
+        Err(AuthError::AuthzModeDisabled(_))
+    ));
 }

@@ -3,8 +3,8 @@
 //! `revoked_at` / `expires_at` are stamped by the database.
 
 use async_trait::async_trait;
-use auth_lib::AuthError;
-use auth_lib::token::{NewRevocation, Revocation, RevocationRepository, RevocationScope};
+use z_auth::AuthError;
+use z_auth::security::token::{NewRevocation, Revocation, RevocationRepository, RevocationScope};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -30,6 +30,7 @@ impl RevocationRepository for PgRevocationRepository {
         let (scope, subject) = match revocation.scope {
             RevocationScope::Session(id) => (PgRevocationScope::Session, id),
             RevocationScope::User(id) => (PgRevocationScope::User, id),
+            RevocationScope::Token(jti) => (PgRevocationScope::Token, jti),
         };
         let row: RevocationRow = sqlx::query_as(revocation_queries::INSERT_REVOCATION)
             .bind(scope)

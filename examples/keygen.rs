@@ -1,4 +1,4 @@
-//! Generate the keys and secrets auth-lib needs.
+//! Generate the keys and secrets z-auth needs.
 //!
 //! ```text
 //! cargo run --example keygen
@@ -9,9 +9,9 @@
 //! tokens.  During a key rotation, list the old and new verifying keys
 //! separated by a comma.
 
-use auth_lib::token::keys::{generate_refresh_secret, generate_signing_key};
+use z_auth::security::token::keys::{generate_refresh_secret, generate_signing_key};
 
-fn main() -> Result<(), auth_lib::AuthError> {
+fn main() -> Result<(), z_auth::AuthError> {
     let keys = generate_signing_key()?;
     println!("# auth service only");
     println!("AUTH_JWT_SIGNING_KEY={}", keys.signing_key);

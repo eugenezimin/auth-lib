@@ -1,7 +1,7 @@
 //! PostgreSQL connection settings.
 //!
 //! Database configuration belongs to the adapter / host application, not to
-//! auth-lib itself.
+//! z-auth itself.
 
 use std::time::Duration;
 

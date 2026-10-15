@@ -9,7 +9,7 @@ mod support;
 use std::sync::Arc;
 use std::time::Duration;
 
-use auth_lib::prelude::*;
+use z_auth::prelude::*;
 
 use crate::support::{IP_A, InMemoryDb, MockClock, register_and_login, server_with, test_config};
 

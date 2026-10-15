@@ -4,11 +4,11 @@
 
 mod support;
 
-use auth_lib::prelude::*;
+use z_auth::prelude::*;
 
 use crate::support::{make_auth, new_role, register_request};
 
-async fn user_and_role(auth: &AuthLib) -> (User, Role) {
+async fn user_and_role(auth: &ZAuth) -> (User, Role) {
     let user = auth
         .users()
         .register(register_request("user@example.com", Some("user")))
@@ -18,7 +18,7 @@ async fn user_and_role(auth: &AuthLib) -> (User, Role) {
     (user, role)
 }
 
-async fn active_role_ids(auth: &AuthLib, user_id: uuid::Uuid) -> Vec<uuid::Uuid> {
+async fn active_role_ids(auth: &ZAuth, user_id: uuid::Uuid) -> Vec<uuid::Uuid> {
     auth.users()
         .find_with_roles_by_id(user_id)
         .await

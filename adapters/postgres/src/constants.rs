@@ -27,9 +27,9 @@ pub const ENV_DB_CONNECT_TIMEOUT_SECS: &str = "DB_CONNECT_TIMEOUT_SECS";
 // ── Constraint names (see migrations/0001_initial_schema.sql) ────────────────
 
 pub const PG_UNIQUE_VIOLATION: &str = "23505";
-pub const CONSTRAINT_USERS_EMAIL: &str = "users_email";
-pub const CONSTRAINT_USERS_USERNAME: &str = "users_username_key";
-pub const CONSTRAINT_ROLES_NAME: &str = "roles_name_key";
-pub const CONSTRAINT_ROLES_CODE: &str = "roles_code_key";
-pub const CONSTRAINT_PERMISSIONS_CODE: &str = "permissions_code_key";
+pub const CONSTRAINT_IDENTITY_USERS_EMAIL: &str = "identity_users_email";
+pub const CONSTRAINT_IDENTITY_USERS_USERNAME: &str = "identity_users_username_key";
+pub const CONSTRAINT_IDENTITY_ROLES_NAME: &str = "identity_roles_name_key";
+pub const CONSTRAINT_IDENTITY_ROLES_CODE: &str = "identity_roles_code_key";
+pub const CONSTRAINT_SECURITY_PERMISSIONS_CODE: &str = "security_permissions_code_key";
 pub const CONSTRAINT_USER_ROLE_ACTIVE: &str = "unique_user_role_active";

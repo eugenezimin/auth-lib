@@ -2,8 +2,8 @@
 
 use std::time::Duration;
 
-use auth_lib::config::{ConfigError, ConfigLoader, DirectLoader, RawConfig};
-use auth_lib::constants::*;
+use z_auth::conf::config::{ConfigError, ConfigLoader, DirectLoader, RawConfig};
+use z_auth::conf::constants::*;
 
 // 32 bytes of 0x07 / 0x09, base64.
 const KEY_A: &str = "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=";
@@ -17,7 +17,7 @@ fn config_direct_load_with_overrides() {
             .jwt_verifying_keys([KEY_A, KEY_B])
             .jwt_access_ttl_secs(60)
             .jwt_leeway_secs(5)
-            .jwt_issuer("auth-lib-test")
+            .jwt_issuer("z-auth-test")
             .refresh_secret(KEY_B)
             .session_idle_timeout_secs(600)
             .session_absolute_timeout_secs(3_600)
@@ -107,4 +107,38 @@ fn config_debug_redacts_secrets() {
     let dbg = format!("{cfg:?}");
     assert!(!dbg.contains("[7, 7"), "signing key leaked: {dbg}");
     assert!(!dbg.contains("[9, 9"), "refresh secret leaked: {dbg}");
+}
+
+// ── Refresh retry matching ───────────────────────────────────────────────────
+
+#[test]
+fn refresh_retry_match_parses_and_validates() {
+    let cfg = RawConfig::default().build().unwrap();
+    assert!(cfg.session.retry_match.ip, "default matches on IP only");
+    assert!(!cfg.session.retry_match.user_agent && !cfg.session.retry_match.fingerprint);
+
+    let m = RawConfig::default()
+        .refresh_retry_match("fingerprint, user_agent")
+        .build()
+        .unwrap()
+        .session
+        .retry_match;
+    assert!(!m.ip && m.user_agent && m.fingerprint);
+
+    for bad in ["ip,cookie", " , "] {
+        assert!(
+            matches!(
+                RawConfig::default().refresh_retry_match(bad).build(),
+                Err(ConfigError::Parse { .. })
+            ),
+            "{bad:?} should be rejected"
+        );
+    }
+}
+
+#[test]
+fn cluster_variables_are_not_read_by_core() {
+    // Cluster settings belong to z-auth-cluster's own loader.
+    let dbg = format!("{:?}", RawConfig::default());
+    assert!(!dbg.contains("cluster"), "{dbg}");
 }

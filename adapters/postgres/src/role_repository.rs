@@ -3,8 +3,8 @@
 //! All SQL lives in [`crate::queries::role_queries`].
 
 use async_trait::async_trait;
-use auth_lib::AuthError;
-use auth_lib::access::{NewRole, Role, RoleRepository};
+use z_auth::AuthError;
+use z_auth::identity::access::{NewRole, Role, RoleRepository, RoleUpdate};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -69,6 +69,18 @@ impl RoleRepository for PgRoleRepository {
             .await
             .map_err(map_sqlx_error)?;
         Ok(rows.into_iter().map(Into::into).collect())
+    }
+
+    async fn update(&self, id: Uuid, update: &RoleUpdate) -> Result<Option<Role>, AuthError> {
+        let row: Option<RoleRow> = sqlx::query_as(role_queries::UPDATE_ROLE)
+            .bind(&update.name)
+            .bind(update.description.is_some())
+            .bind(update.description.clone().flatten())
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(map_sqlx_error)?;
+        Ok(row.map(Into::into))
     }
 
     async fn delete(&self, id: Uuid) -> Result<Option<Uuid>, AuthError> {

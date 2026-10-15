@@ -1,4 +1,4 @@
-//! SQL query constants for the `users_roles` table.
+//! SQL query constants for the `identity_role_assignments` table.
 //!
 //! All queries use `$N` positional parameters — values are never interpolated.
 //!
@@ -8,7 +8,7 @@
 
 /// Insert a new active assignment row and return it fully hydrated.
 pub const INSERT_USER_ROLE: &str = r#"
-    INSERT INTO users_roles (user_id, role_id)
+    INSERT INTO identity_role_assignments (user_id, role_id)
     VALUES ($1, $2)
     ON CONFLICT DO NOTHING
     RETURNING id, user_id, role_id, assigned_at, revoked_at
@@ -19,7 +19,7 @@ pub const INSERT_USER_ROLE: &str = r#"
 /// ensures only the live assignment is affected; historical rows are
 /// left untouched.
 pub const REVOKE_USER_ROLE: &str = r#"
-    UPDATE users_roles
+    UPDATE identity_role_assignments
     SET    revoked_at = now()
     WHERE  user_id    = $1
       AND  role_id    = $2
@@ -31,7 +31,7 @@ pub const REVOKE_USER_ROLE: &str = r#"
 /// Uses the partial index `idx_users_roles_active`.
 pub const LIST_ACTIVE_FOR_USER: &str = r#"
     SELECT id, user_id, role_id, assigned_at, revoked_at
-    FROM   users_roles
+    FROM   identity_role_assignments
     WHERE  user_id    = $1
       AND  revoked_at IS NULL
     ORDER  BY assigned_at DESC
@@ -40,7 +40,7 @@ pub const LIST_ACTIVE_FOR_USER: &str = r#"
 /// Full history (active + revoked) for a user, newest first.
 pub const LIST_ALL_FOR_USER: &str = r#"
     SELECT id, user_id, role_id, assigned_at, revoked_at
-    FROM   users_roles
+    FROM   identity_role_assignments
     WHERE  user_id = $1
     ORDER  BY assigned_at DESC
 "#;
@@ -49,7 +49,7 @@ pub const LIST_ALL_FOR_USER: &str = r#"
 pub const IS_ROLE_ACTIVE: &str = r#"
     SELECT EXISTS(
         SELECT 1
-        FROM   users_roles
+        FROM   identity_role_assignments
         WHERE  user_id    = $1
           AND  role_id    = $2
           AND  revoked_at IS NULL
@@ -59,8 +59,15 @@ pub const IS_ROLE_ACTIVE: &str = r#"
 /// Revoke **all** active assignments for a user in one statement.
 /// Returns the count of updated rows via `sqlx`'s `rows_affected()`.
 pub const REVOKE_ALL_FOR_USER: &str = r#"
-    UPDATE users_roles
+    UPDATE identity_role_assignments
     SET    revoked_at = now()
     WHERE  user_id    = $1
       AND  revoked_at IS NULL
+"#;
+
+/// Users holding a role actively.
+pub const LIST_ACTIVE_HOLDERS: &str = r#"
+    SELECT DISTINCT user_id FROM identity_role_assignments
+    WHERE role_id = $1 AND revoked_at IS NULL
+    ORDER BY user_id
 "#;

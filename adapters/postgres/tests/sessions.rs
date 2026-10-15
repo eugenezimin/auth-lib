@@ -4,7 +4,7 @@
 //! Every timestamp asserted here was assigned by the database.
 //!
 //! Run with:
-//!   cargo test -p auth-lib-postgres --test sessions
+//!   cargo test -p z-auth-postgres --test sessions
 
 mod helpers;
 
@@ -12,14 +12,14 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::time::Duration;
 
-use auth_lib::authentication::{
-    ClientContext, Credentials, RotateOutcome, SessionLifetimes, SessionRepository, SessionStatus,
+use z_auth::identity::user::{RegisterUser, UpdateUser};
+use z_auth::security::authentication::{ClientContext, Credentials};
+use z_auth::security::session::RevocationReason;
+use z_auth::security::session::{
+    IssueContext, RotateOutcome, SessionLifetimes, SessionRepository, SessionStatus,
 };
-use auth_lib::token::{
-    NewRevocation, Revocation, RevocationReason, RevocationRepository, RevocationScope,
-};
-use auth_lib::user::{RegisterUser, UpdateUser};
-use auth_lib_postgres::{PgRevocationRepository, PgSessionRepository};
+use z_auth::security::token::{NewRevocation, Revocation, RevocationRepository, RevocationScope};
+use z_auth_postgres::{PgRevocationRepository, PgSessionRepository};
 use uuid::Uuid;
 
 use crate::helpers::{cleanup_user_by_id, create_test_user, make_service, pool, unique_email};
@@ -27,7 +27,7 @@ use crate::helpers::{cleanup_user_by_id, create_test_user, make_service, pool, u
 const IP: IpAddr = IpAddr::V4(Ipv4Addr::new(192, 0, 2, 10));
 const PASSWORD: &str = "Blablabla1!";
 
-/// auth-lib defaults: 5 min access, 30 min idle, 8 h absolute.
+/// z-auth defaults: 5 min access, 30 min idle, 8 h absolute.
 const ACCESS_TTL: Duration = Duration::from_secs(300);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(1_800);
 const ABSOLUTE_TIMEOUT: Duration = Duration::from_secs(28_800);
@@ -46,7 +46,9 @@ fn lifetimes(history_size: u32) -> SessionLifetimes {
     }
 }
 
-async fn login(service: &auth_lib::AuthLib) -> (Uuid, auth_lib::authentication::TokenPair) {
+async fn login(
+    service: &z_auth::ZAuth,
+) -> (Uuid, z_auth::security::authentication::TokenPair) {
     let email = unique_email("session");
     let user = create_test_user(
         service,
@@ -66,14 +68,15 @@ async fn login(service: &auth_lib::AuthLib) -> (Uuid, auth_lib::authentication::
                 email,
                 password: PASSWORD.into(),
             },
-            ClientContext {
-                ip: IP,
-                user_agent: Some("integration-test".into()),
-            },
+            ClientContext::new(IP).with_user_agent("integration-test"),
         )
         .await
         .expect("login");
     (user.id, pair)
+}
+
+fn issued() -> IssueContext {
+    ClientContext::new(IP).issue_context(None)
 }
 
 #[tokio::test]
@@ -138,12 +141,13 @@ async fn test_database_assigns_ids_and_timestamps() {
     assert_eq!(pair.access_expires_at, first.access_expires_at);
 
     // Bookkeeping created_at is stamped alongside the event columns.
-    let (same,): (bool,) =
-        sqlx::query_as("SELECT created_at = issued_at FROM session_generations WHERE id = $1")
-            .bind(first.access_jti)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+    let (same,): (bool,) = sqlx::query_as(
+        "SELECT created_at = issued_at FROM security_session_generations WHERE id = $1",
+    )
+    .bind(first.access_jti)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     assert!(same);
 
     cleanup_user_by_id(&service, user_id).await.unwrap();
@@ -157,14 +161,17 @@ async fn test_rotate_is_compare_and_swap_and_trims_history() {
     let sid = pair.session_id;
 
     // A stale expected generation loses.
-    let stale = repo.rotate(sid, 7, IP, &lifetimes(3)).await.unwrap();
+    let stale = repo.rotate(sid, 7, &issued(), &lifetimes(3)).await.unwrap();
     assert!(matches!(stale, RotateOutcome::Conflict));
 
     for g in 2..=5 {
         let RotateOutcome::Rotated {
             session,
             generation,
-        } = repo.rotate(sid, g - 1, IP, &lifetimes(3)).await.unwrap()
+        } = repo
+            .rotate(sid, g - 1, &issued(), &lifetimes(3))
+            .await
+            .unwrap()
         else {
             panic!("rotation to {g} should win");
         };
@@ -201,9 +208,10 @@ async fn test_concurrent_rotations_have_one_winner() {
     let (user_id, pair) = login(&service).await;
 
     let lt = lifetimes(10);
+    let issued = issued();
     let (a, b) = tokio::join!(
-        repo.rotate(pair.session_id, 1, IP, &lt),
-        repo.rotate(pair.session_id, 1, IP, &lt),
+        repo.rotate(pair.session_id, 1, &issued, &lt),
+        repo.rotate(pair.session_id, 1, &issued, &lt),
     );
     let outcomes = [a.unwrap(), b.unwrap()];
     let won = outcomes
@@ -221,7 +229,9 @@ async fn test_load_for_refresh_reads_everything_in_one_go() {
     let repo = PgSessionRepository::new(pool().await);
     let (user_id, pair) = login(&service).await;
     let sid = pair.session_id;
-    repo.rotate(sid, 1, IP, &lifetimes(10)).await.unwrap();
+    repo.rotate(sid, 1, &issued(), &lifetimes(10))
+        .await
+        .unwrap();
 
     let snap = repo.load_for_refresh(sid, 1).await.unwrap().unwrap();
     assert_eq!(snap.session.current_generation, 2);
@@ -247,10 +257,7 @@ async fn test_load_for_refresh_reads_everything_in_one_go() {
 async fn test_refresh_flow_against_postgres() {
     let service = make_service().await;
     let (user_id, first) = login(&service).await;
-    let ctx = ClientContext {
-        ip: IP,
-        user_agent: None,
-    };
+    let ctx = ClientContext::new(IP);
 
     let second = service
         .authentication()
@@ -314,13 +321,16 @@ async fn test_ended_session_check_constraint() {
     let pool = pool().await;
     let (user_id, pair) = login(&service).await;
 
-    // Ending without ended_at / end_reason violates chk_sessions_ended.
-    let err = sqlx::query("UPDATE sessions SET status = 'revoked' WHERE id = $1")
+    // Ending without ended_at / end_reason violates chk_security_sessions_ended.
+    let err = sqlx::query("UPDATE security_sessions SET status = 'revoked' WHERE id = $1")
         .bind(pair.session_id)
         .execute(&pool)
         .await
         .expect_err("half-ended session must be rejected");
-    assert!(err.to_string().contains("chk_sessions_ended"), "got: {err}");
+    assert!(
+        err.to_string().contains("chk_security_sessions_ended"),
+        "got: {err}"
+    );
 
     cleanup_user_by_id(&service, user_id).await.unwrap();
 }
@@ -334,7 +344,7 @@ async fn test_purge_removes_sessions_past_retention() {
 
     // Backdate the end by two hours (the only way to time-travel the DB).
     sqlx::query(
-        "UPDATE sessions
+        "UPDATE security_sessions
          SET status = 'revoked', end_reason = 'logout', ended_at = now() - interval '2 hours'
          WHERE id = $1",
     )
@@ -411,7 +421,7 @@ async fn test_revocations_expire_and_purge() {
     let repo = PgRevocationRepository::new(pool.clone());
     let stale_subject = Uuid::new_v4();
     sqlx::query(
-        "INSERT INTO revocations (scope, subject, reason, revoked_at, expires_at)
+        "INSERT INTO security_token_revocations (scope, subject, reason, revoked_at, expires_at)
          VALUES ('user', $1, 'logout_all',
                  now() - interval '1000 seconds', now() - interval '600 seconds')",
     )
@@ -499,4 +509,68 @@ async fn test_password_change_ends_sessions() {
     );
 
     cleanup_user_by_id(&service, user_id).await.unwrap();
+}
+
+#[tokio::test]
+async fn test_generations_store_who_they_were_issued_to_and_their_aliases() {
+    let service = make_service().await;
+    let (user_id, pair) = login(&service).await;
+    let pool = pool().await;
+    let repo = PgSessionRepository::new(pool.clone());
+    let sid = pair.session_id;
+
+    let g1 = repo.find_generation(sid, 1).await.unwrap().unwrap();
+    assert_eq!(g1.parent_jti, None);
+    assert_eq!(g1.issued_user_agent.as_deref(), Some("integration-test"));
+    assert!(g1.aliases.is_empty());
+
+    let issued = ClientContext::new(IP)
+        .with_user_agent("agent/2")
+        .with_fingerprint("device-1")
+        .issue_context(Some(g1.access_jti));
+    let RotateOutcome::Rotated { generation: g2, .. } =
+        repo.rotate(sid, 1, &issued, &lifetimes(3)).await.unwrap()
+    else {
+        panic!("rotation should succeed");
+    };
+    assert_eq!(g2.parent_jti, Some(g1.access_jti));
+    assert_eq!(g2.issued_user_agent.as_deref(), Some("agent/2"));
+    assert_eq!(g2.fingerprint_hash, issued.fingerprint_hash);
+    assert_eq!(repo.find_generation(sid, 2).await.unwrap().unwrap(), g2);
+
+    // A losing fork variant (written by the sync engine in federation mode).
+    let alias = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO security_session_fork_aliases
+             (jti, session_id, generation, parent_jti, issued_ip, issued_at, access_expires_at)
+         VALUES ($1, $2, 2, $3, $4, now(), now())",
+    )
+    .bind(alias)
+    .bind(sid)
+    .bind(g1.access_jti)
+    .bind(IP)
+    .execute(&pool)
+    .await
+    .unwrap();
+    let snapshot = repo.load_for_refresh(sid, 2).await.unwrap().unwrap();
+    assert_eq!(snapshot.presented.unwrap().aliases, vec![alias]);
+    assert_eq!(snapshot.current.unwrap().aliases, vec![alias]);
+    assert_eq!(
+        repo.find_generation(sid, 2).await.unwrap().unwrap().aliases,
+        vec![alias]
+    );
+
+    // Trimmed with its generation (history 3: generation 2 goes at 5).
+    for g in 2..=4 {
+        repo.rotate(sid, g, &issued, &lifetimes(3)).await.unwrap();
+    }
+    let left: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM security_session_fork_aliases WHERE session_id = $1",
+    )
+    .bind(sid)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(left, 0);
+    let _ = cleanup_user_by_id(&service, user_id).await;
 }

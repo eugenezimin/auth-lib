@@ -1,31 +1,50 @@
-//! # auth-lib-postgres
+//! # z-auth-postgres
 //!
-//! Reference PostgreSQL adapter for [`auth_lib`], built on `sqlx`.
+//! Reference PostgreSQL adapter for [`z_auth`], built on `sqlx`.
 //!
-//! Implements every auth-lib repository port.  The core crate never depends
+//! Implements every z-auth repository port.  The core crate never depends
 //! on this one — host applications pick it (or write their own adapter).
 //!
 //! ```rust,ignore
 //! use std::sync::Arc;
-//! use auth_lib::{AuthLib, config::{ConfigLoader, EnvLoader}};
-//! use auth_lib_postgres::*;
+//! use z_auth::{ZAuth, conf::config::{ConfigLoader, EnvLoader}};
+//! use z_auth_postgres::*;
 //!
 //! let pool = build_pg_pool(&PgConfig::from_env()?).await?;
 //! run_migrations(&pool).await?;       // apply pending schema migrations
-//! let auth = AuthLib::builder(EnvLoader.load_config()?, repositories(&pool))
+//! let auth = ZAuth::builder(EnvLoader.load_config()?, repositories(&pool))
 //!     .permissions(Arc::new(PgPermissionRepository::new(pool.clone()))) // permission modes
-//!     .cluster(transport, Arc::new(PgNodeRepository::new(pool)))        // optional
 //!     .build()?;
 //!
-//! auth.start().await?;   // load state, join the cluster; then auth.tick() every heartbeat
+//! auth.start().await?;   // load state; then auth.tick() periodically
+//! ```
+//!
+//! ## Features
+//!
+//! - `shared` — the node registry ([`PgNodeRepository`]) for
+//!   z-auth-cluster's shared mode, and the cluster migration set
+//!   ([`CLUSTER_MIGRATOR`], [`run_cluster_migrations`]).
+//! - `federation` *(implies `shared`)* — the federation sync store
+//!   ([`PgSyncStore`]) and the session-store schema
+//!   ([`SESSION_STORE_MIGRATOR`]).
+//!
+//! ```rust,ignore
+//! // features = ["shared"]
+//! run_cluster_migrations(&pool).await?;   // core, then cluster tables
+//! let cluster = Arc::new(z_auth_cluster::SharedCluster::new(
+//!     settings, transport, Arc::new(PgNodeRepository::new(pool.clone())),
+//! ));
+//! let auth = ZAuth::builder(config, repositories(&pool)).extension(cluster.clone()).build()?;
 //! ```
 
-mod cluster_repository;
+#[cfg(feature = "shared")]
+mod cluster;
 mod codes;
 pub mod config;
 pub mod constants;
 mod enums;
 mod errors;
+mod key_repository;
 mod permission_repository;
 pub mod pool;
 mod queries;
@@ -36,8 +55,12 @@ mod session_repository;
 mod user_repository;
 mod user_role_repository;
 
-pub use cluster_repository::{PgKeyRepository, PgNodeRepository};
+#[cfg(feature = "shared")]
+pub use cluster::PgNodeRepository;
+#[cfg(feature = "federation")]
+pub use cluster::PgSyncStore;
 pub use config::PgConfig;
+pub use key_repository::PgKeyRepository;
 pub use permission_repository::PgPermissionRepository;
 pub use pool::build_pg_pool;
 pub use revocation_repository::PgRevocationRepository;
@@ -48,11 +71,11 @@ pub use user_role_repository::PgUserRoleRepository;
 
 use std::sync::Arc;
 
-use auth_lib::Repositories;
+use z_auth::Repositories;
 
-/// Every repository auth-lib requires, on one pool.  The optional ones —
-/// [`PgPermissionRepository`] (permission modes) and [`PgNodeRepository`]
-/// (cluster) — are passed to the builder separately.
+/// Every repository z-auth requires, on one pool.  The optional
+/// [`PgPermissionRepository`] (permission modes) is passed to the builder
+/// separately.
 pub fn repositories(pool: &sqlx::PgPool) -> Repositories {
     Repositories {
         users: Arc::new(PgUserRepository::new(pool.clone())),
@@ -64,13 +87,44 @@ pub fn repositories(pool: &sqlx::PgPool) -> Repositories {
     }
 }
 
-/// Versioned schema migrations (`migrations/NNNN_*.sql`), embedded at
-/// compile time.  Applied migrations are recorded, with checksums, in the
-/// `_sqlx_migrations` table; running the migrator only applies new files.
-pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+/// Versioned schema migrations (`migrations/NNNN_*.sql`, versions below
+/// 1000), embedded at compile time.  Applied migrations are recorded, with
+/// checksums, in the `_sqlx_migrations` table; running the migrator only
+/// applies new files.  Versions it does not know (the cluster set's) are
+/// left alone.
+pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate::Migrator {
+    ignore_missing: true,
+    ..sqlx::migrate!("./migrations")
+};
 
-/// Apply every pending migration.  Idempotent, and safe to call from several
-/// processes at once (sqlx serialises runs with an advisory lock).
+/// z-auth-cluster's tables (`migrations_cluster/`, versions from 1001):
+/// the node registry, federation snapshots, the change feed and its
+/// triggers on the core tables.  Applied on top of [`MIGRATOR`]; see
+/// [`run_cluster_migrations`].
+#[cfg(feature = "shared")]
+pub static CLUSTER_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate::Migrator {
+    ignore_missing: true,
+    ..sqlx::migrate!("./migrations_cluster")
+};
+
+/// Federation mode, every service except the authority: the session-store
+/// schema (`migrations_session_store/`) — sessions, revocations, keys,
+/// snapshots, the instance registry and the change feed; no users.
+/// Install it in its own schema (`search_path`).
+#[cfg(feature = "federation")]
+pub static SESSION_STORE_MIGRATOR: sqlx::migrate::Migrator =
+    sqlx::migrate!("./migrations_session_store");
+
+/// Apply every pending session-store migration.
+#[cfg(feature = "federation")]
+pub async fn run_session_store_migrations(
+    pool: &sqlx::PgPool,
+) -> Result<(), sqlx::migrate::MigrateError> {
+    SESSION_STORE_MIGRATOR.run(pool).await
+}
+
+/// Apply every pending core migration.  Idempotent, and safe to call from
+/// several processes at once (sqlx serialises runs with an advisory lock).
 ///
 /// ```rust,ignore
 /// let pool = build_pg_pool(&PgConfig::from_env()?).await?;
@@ -78,4 +132,13 @@ pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 /// ```
 pub async fn run_migrations(pool: &sqlx::PgPool) -> Result<(), sqlx::migrate::MigrateError> {
     MIGRATOR.run(pool).await
+}
+
+/// Apply every pending core migration, then every pending cluster one.
+#[cfg(feature = "shared")]
+pub async fn run_cluster_migrations(
+    pool: &sqlx::PgPool,
+) -> Result<(), sqlx::migrate::MigrateError> {
+    MIGRATOR.run(pool).await?;
+    CLUSTER_MIGRATOR.run(pool).await
 }
