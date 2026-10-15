@@ -114,7 +114,11 @@ async fn test_feed_pages_and_captures_writes() {
     })
     .await;
     assert!(end > start);
-    assert!(store.head().await.unwrap() >= end);
+    // Not `>= end`: a feed row moves when its record changes again, so
+    // while another test holds a transaction open, the newest row can be
+    // hidden and head can sit behind a position already read.  Our own
+    // rows stay put and are visible, so head is past them.
+    assert!(store.head().await.unwrap() > start);
     // Pages of two.
     let first = store.changes_since(start, 2).await.unwrap();
     assert_eq!(first.site, site);
@@ -169,7 +173,12 @@ async fn test_merges_write_only_when_something_changes() {
         .insert(&new_revocation())
         .await
         .unwrap();
-    let (_, cursor) = drain(&store, FeedCursor::default()).await;
+    // Wait for the insert itself: another test's open transaction can hold
+    // the feed back, and it must not surface in the no-op check below.
+    let (_, cursor) = drain_until(&store, FeedCursor::default(), |r| {
+        has_revocation(r, stored.id)
+    })
+    .await;
 
     assert_eq!(
         store.merge_revocation(&stored).await.unwrap(),
@@ -290,22 +299,13 @@ async fn test_session_round_trip_cas_and_session_store_schema() {
         snapshot.presented.unwrap().fingerprint_hash,
         issued.fingerprint_hash
     );
-    let (feed, _) = {
-        let mut all = Vec::new();
-        let mut after = FeedCursor::default();
-        loop {
-            let page = remote.changes_since(after, 50).await.unwrap();
-            all.extend(page.records);
-            after = page.next;
-            if !page.more {
-                break (all, after);
-            }
-        }
-    };
-    assert!(
-        feed.iter()
+    // The copy enters the store's own feed (once no other transaction holds
+    // the feed back).
+    drain_until(&remote, FeedCursor::default(), |r| {
+        r.iter()
             .any(|r| matches!(r, SyncRecord::Session(a) if a.session.id == sid))
-    );
+    })
+    .await;
     let _ = remote_rev;
 
     // The authority drops sessions of users it deleted (FK).
