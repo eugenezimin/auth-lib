@@ -28,20 +28,25 @@ pub const SEED_FEED: &str = r#"
 
 /// Entries after the cursor whose transaction is older than every running
 /// one — so nothing still committing can be skipped.
+///
+/// `ORDER BY` names the table's column: a bare `txid` would mean the text
+/// output alias, and text order breaks whenever transaction ids gain a
+/// digit ('999' > '1000').
 pub const CHANGES_SINCE: &str = r#"
     SELECT kind, key, seq, txid::text AS txid
     FROM cluster_change_feed
     WHERE (txid, seq) > ($1::text::xid8, $2)
       AND txid < pg_snapshot_xmin(pg_current_snapshot())
-    ORDER BY txid, seq
+    ORDER BY cluster_change_feed.txid, seq
     LIMIT $3
 "#;
 
+/// The newest safe entry; ordered by the column, as in [`CHANGES_SINCE`].
 pub const HEAD: &str = r#"
     SELECT txid::text AS txid, seq
     FROM cluster_change_feed
     WHERE txid < pg_snapshot_xmin(pg_current_snapshot())
-    ORDER BY txid DESC, seq DESC
+    ORDER BY cluster_change_feed.txid DESC, seq DESC
     LIMIT 1
 "#;
 

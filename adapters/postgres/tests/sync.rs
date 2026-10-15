@@ -128,6 +128,41 @@ async fn test_feed_pages_and_captures_writes() {
 }
 
 #[tokio::test]
+async fn test_feed_orders_transaction_ids_numerically() {
+    // A fresh schema, so its feed holds only the rows below.
+    let schema = format!("feed_order_{}", Uuid::new_v4().simple());
+    let remote_pool = session_store_pool(&schema).await;
+    let store = PgSyncStore::new(remote_pool.clone());
+    store.site_id().await.unwrap();
+    // Transaction ids 9 and 10: as text, '9' sorts after '10'.
+    for (txid, seq) in [(9_i64, 1_i64), (10, 2)] {
+        sqlx::query(
+            "INSERT INTO cluster_change_feed (kind, key, seq, txid)
+             VALUES ('revocation', $1, $2, $3::text::xid8)",
+        )
+        .bind(Uuid::new_v4().to_string())
+        .bind(seq)
+        .bind(txid.to_string())
+        .execute(&remote_pool)
+        .await
+        .unwrap();
+    }
+
+    assert_eq!(store.head().await.unwrap(), FeedCursor { txid: 10, seq: 2 });
+    let page = store.changes_since(FeedCursor::default(), 1).await.unwrap();
+    assert_eq!(page.next, FeedCursor { txid: 9, seq: 1 });
+    assert!(page.more);
+    let page = store.changes_since(page.next, 1).await.unwrap();
+    assert_eq!(page.next, FeedCursor { txid: 10, seq: 2 });
+    assert!(!page.more);
+
+    sqlx::query(&format!("DROP SCHEMA {schema} CASCADE"))
+        .execute(&pool().await)
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 async fn test_a_change_still_committing_is_never_skipped() {
     let pool = pool().await;
     let store = PgSyncStore::new(pool.clone());
