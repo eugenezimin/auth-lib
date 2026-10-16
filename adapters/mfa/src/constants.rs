@@ -1,5 +1,8 @@
 //! z-auth-mfa constants: defaults, limits and the `AUTH_MFA_*` environment
-//! variables read by [`MfaEnvLoader`](crate::config::MfaEnvLoader).
+//! variables read by [`MfaEnvLoader`](crate::config::MfaEnvLoader), and their
+//! paths in the `mfa` section of the configuration file.
+
+use z_auth::conf::config::Key;
 
 // ── Policy ────────────────────────────────────────────────────────────────────
 
@@ -137,3 +140,53 @@ pub const ENV_MFA_AUTO_SEND: &str = "AUTH_MFA_AUTO_SEND";
 pub const ENV_MFA_END_SESSIONS_ON_REMOVAL: &str = "AUTH_MFA_END_SESSIONS_ON_REMOVAL";
 pub const ENV_MFA_PURGE_INTERVAL_SECS: &str = "AUTH_MFA_PURGE_INTERVAL_SECS";
 pub const ENV_MFA_PURGE_RETENTION_SECS: &str = "AUTH_MFA_PURGE_RETENTION_SECS";
+
+// ── Configuration file (read by `config::MfaSourceLoader`) ───────────────────
+
+/// z-auth-mfa's top-level section in the configuration file.
+pub const SECTION: &str = "mfa";
+
+/// Sub-sections of [`SECTION`] that belong to other crates and are not
+/// checked here: `mfa.delivery` is read by z-auth-mfa-sender.
+pub const FOREIGN_SECTIONS: &[&str] = &["mfa.delivery"];
+
+/// Every z-auth-mfa setting: its environment variable and its path in the
+/// file.
+pub const KEYS: &[Key] = &[
+    Key::new(ENV_MFA_ENFORCEMENT, "mfa.enforcement"),
+    Key::new(ENV_MFA_REQUIRED_ROLES, "mfa.required_roles"),
+    Key::new(ENV_MFA_UNENROLLED, "mfa.unenrolled"),
+    Key::new(ENV_MFA_METHODS, "mfa.methods"),
+    Key::new(ENV_MFA_ENCRYPTION_KEY, "mfa.encryption_key"),
+    Key::new(
+        ENV_MFA_PREVIOUS_ENCRYPTION_KEYS,
+        "mfa.previous_encryption_keys",
+    ),
+    Key::new(ENV_MFA_HASH_KEY, "mfa.hash_key"),
+    Key::new(ENV_MFA_TOTP_ISSUER, "mfa.totp.issuer"),
+    Key::new(ENV_MFA_TOTP_ALGORITHM, "mfa.totp.algorithm"),
+    Key::new(ENV_MFA_TOTP_DIGITS, "mfa.totp.digits"),
+    Key::new(ENV_MFA_TOTP_PERIOD_SECS, "mfa.totp.period_secs"),
+    Key::new(ENV_MFA_TOTP_SKEW_STEPS, "mfa.totp.skew_steps"),
+    Key::new(ENV_MFA_TOTP_SECRET_BYTES, "mfa.totp.secret_bytes"),
+    Key::new(ENV_MFA_ENROLLMENT_TTL_SECS, "mfa.enrollment_ttl_secs"),
+    Key::new(ENV_MFA_RECOVERY_CODE_COUNT, "mfa.recovery.code_count"),
+    Key::new(ENV_MFA_RECOVERY_CODE_LENGTH, "mfa.recovery.code_length"),
+    Key::new(ENV_MFA_CHALLENGE_TTL_SECS, "mfa.challenge.ttl_secs"),
+    Key::new(ENV_MFA_CHALLENGE_MAX_ATTEMPTS, "mfa.challenge.max_attempts"),
+    Key::new(ENV_MFA_CHALLENGE_MATCH, "mfa.challenge.match"),
+    Key::new(ENV_MFA_LOCKOUT_THRESHOLD, "mfa.lockout.threshold"),
+    Key::new(ENV_MFA_LOCKOUT_WINDOW_SECS, "mfa.lockout.window_secs"),
+    Key::new(ENV_MFA_LOCKOUT_SECS, "mfa.lockout.duration_secs"),
+    Key::new(ENV_MFA_CODE_DIGITS, "mfa.code.digits"),
+    Key::new(ENV_MFA_CODE_TTL_SECS, "mfa.code.ttl_secs"),
+    Key::new(ENV_MFA_CODE_RESEND_SECS, "mfa.code.resend_secs"),
+    Key::new(ENV_MFA_CODE_MAX_SENDS, "mfa.code.max_sends"),
+    Key::new(ENV_MFA_AUTO_SEND, "mfa.code.auto_send"),
+    Key::new(
+        ENV_MFA_END_SESSIONS_ON_REMOVAL,
+        "mfa.end_sessions_on_removal",
+    ),
+    Key::new(ENV_MFA_PURGE_INTERVAL_SECS, "mfa.purge.interval_secs"),
+    Key::new(ENV_MFA_PURGE_RETENTION_SECS, "mfa.purge.retention_secs"),
+];

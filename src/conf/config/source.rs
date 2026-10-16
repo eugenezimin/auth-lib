@@ -240,6 +240,17 @@ impl Section<'_> {
         }
     }
 
+    /// Like [`Self::get`], but a blank value counts as unset in each layer,
+    /// so a blank variable does not hide the file's value.
+    pub fn get_non_blank(&self, env: &str) -> Option<Setting> {
+        let present = |v: &Setting| !v.value.trim().is_empty();
+        let from_env = self.source.get_env(env).filter(present);
+        from_env.or_else(|| {
+            let key = self.keys.iter().find(|k| k.env == env)?;
+            self.source.get_file(key.path).filter(present)
+        })
+    }
+
     /// The underlying source.
     pub fn source(&self) -> &ConfigSource {
         self.source
