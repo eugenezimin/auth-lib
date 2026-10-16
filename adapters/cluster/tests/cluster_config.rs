@@ -183,7 +183,7 @@ cluster:
   missing_after: 3
   retired_ttl_secs: 600
   max_skew_secs: 10
-  self_fence: "off"
+  self_fence: off
   seeds: [ums.internal:7000, 10.0.0.5:7001]
   advertise:
     ip: 10.0.0.9

@@ -96,10 +96,14 @@ impl ConfigSource {
 
     #[cfg(feature = "yaml")]
     fn yaml_named(text: &str, name: String) -> Result<Self, ConfigError> {
-        let root: Node = serde_saphyr::from_str(text).map_err(|e| ConfigError::Parse {
-            key: name.clone(),
-            reason: format!("invalid YAML: {e}"),
-        })?;
+        // YAML 1.2 booleans: only `true` / `false`, so values such as
+        // `off` (`self_fence`, `enforcement`) stay strings.
+        let options = serde_saphyr::options! { strict_booleans: true };
+        let root: Node =
+            serde_saphyr::from_str_with_options(text, options).map_err(|e| ConfigError::Parse {
+                key: name.clone(),
+                reason: format!("invalid YAML: {e}"),
+            })?;
         Ok(Self {
             env: None,
             file: Some(Arc::new(Document::new(name, root)?)),

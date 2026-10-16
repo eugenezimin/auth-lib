@@ -176,6 +176,22 @@ fn errors_name_the_path_or_the_variable() {
 }
 
 #[test]
+fn only_true_and_false_are_booleans() {
+    // YAML 1.1 words stay text, like the environment variable would.
+    const MODE: Key = Key::new("X_MODE", "server.mode");
+    let source = ConfigSource::yaml_str("server:\n  mode: off\n").unwrap();
+    assert_eq!(source.get(&MODE).unwrap().value, "off");
+
+    let yes = load("auth:\n  session:\n    ip_binding: yes\n");
+    assert_eq!(parse_error_key(yes), "auth.session.ip_binding in YAML");
+
+    let cfg =
+        load("auth:\n  session:\n    ip_binding: true\n  password:\n    require_digit: false\n")
+            .unwrap();
+    assert!(cfg.session.ip_binding && !cfg.password.require_digit);
+}
+
+#[test]
 fn lookup_without_a_file_behaves_like_the_environment() {
     let source = ConfigSource::from_lookup(lookup(&[
         (ENV_JWT_ISSUER, "from-lookup"),
