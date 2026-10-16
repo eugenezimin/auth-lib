@@ -27,7 +27,9 @@ use z_auth::identity::user::model::{
 };
 use z_auth::identity::user::service::UserService;
 use z_auth::security::authentication::account::RefreshAccountSource;
-use z_auth::security::authentication::model::{ClientContext, Credentials, TokenPair};
+use z_auth::security::authentication::model::{
+    ClientContext, Credentials, LoginOutcome, SecondFactorProof, TokenPair,
+};
 use z_auth::security::authentication::service::AuthenticationService;
 use z_auth::security::authorization::model::{
     GrantView, NewPermission, Permission, PermissionCatalog, PermissionValue,
@@ -353,18 +355,37 @@ pub struct ProducingLogin {
     pub clock: Arc<dyn Clock>,
 }
 
+impl ProducingLogin {
+    /// Publish the snapshot of the user the new session belongs to.
+    async fn publish(&self, pair: &TokenPair) -> Result<(), AuthError> {
+        let claims =
+            self.decoder
+                .decode(&pair.access_token, self.clock.now(), ExpiryCheck::Ignore)?;
+        self.producer.account_changed(claims.sub).await
+    }
+}
+
 #[async_trait]
 impl AuthenticationService for ProducingLogin {
     async fn login(
         &self,
         credentials: Credentials,
         ctx: ClientContext,
+    ) -> Result<LoginOutcome, AuthError> {
+        let outcome = self.inner.login(credentials, ctx).await?;
+        // A challenge opened no session yet: publish on completion.
+        if let LoginOutcome::Tokens(pair) = &outcome {
+            self.publish(pair).await?;
+        }
+        Ok(outcome)
+    }
+    async fn complete_login(
+        &self,
+        proof: SecondFactorProof,
+        ctx: ClientContext,
     ) -> Result<TokenPair, AuthError> {
-        let pair = self.inner.login(credentials, ctx).await?;
-        let claims =
-            self.decoder
-                .decode(&pair.access_token, self.clock.now(), ExpiryCheck::Ignore)?;
-        self.producer.account_changed(claims.sub).await?;
+        let pair = self.inner.complete_login(proof, ctx).await?;
+        self.publish(&pair).await?;
         Ok(pair)
     }
     async fn refresh(

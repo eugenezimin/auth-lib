@@ -16,7 +16,7 @@ use async_trait::async_trait;
 use uuid::Uuid;
 use z_auth::conf::config::{AuthConfig, RawConfig};
 use z_auth::identity::user::RegisterUser;
-use z_auth::security::authentication::{ClientContext, Credentials};
+use z_auth::security::authentication::{ClientContext, Credentials, LoginOutcome};
 use z_auth::security::session::SessionStatus;
 use z_auth::security::token::keys::{generate_refresh_secret, generate_signing_key};
 use z_auth::{AuthError, ZAuth};
@@ -206,6 +206,7 @@ async fn test_login_at_the_authority_refresh_and_logout_at_a_session_store() {
             ClientContext::new(IP),
         )
         .await
+        .and_then(LoginOutcome::into_tokens)
         .unwrap();
 
     // Sync: the session store pulls the authority's feed.

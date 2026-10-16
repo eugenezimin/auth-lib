@@ -106,6 +106,20 @@ async fn identity_writes_are_refused_outside_the_authority() {
     ));
     assert!(not_authority(
         orders
+            .authentication()
+            .complete_login(
+                SecondFactorProof {
+                    challenge_token: "mfa1.x.y".into(),
+                    method: None,
+                    code: "123456".into(),
+                },
+                ctx(IP_A),
+            )
+            .await
+            .unwrap_err()
+    ));
+    assert!(not_authority(
+        orders
             .users()
             .deactivate(uuid::Uuid::new_v4())
             .await
@@ -320,6 +334,7 @@ async fn fork_criteria_follow_the_configuration() {
         .authentication()
         .login(credentials("a@example.com"), device(IP_A))
         .await
+        .and_then(LoginOutcome::into_tokens)
         .unwrap();
     settle(&w).await;
     w.clock.advance(ACCESS_TTL);

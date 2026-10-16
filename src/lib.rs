@@ -42,11 +42,23 @@
 //! Optional components plug in through the [`Extension`] port on
 //! [`ZAuthBuilder::extension`]: they subscribe to domain events (new and
 //! enforced revocations — the denylist changes —, verifying keys, catalog
-//! changes), may wrap services and install a refresh gate or a serving
-//! fence, and are driven by [`ZAuth::start`], [`tick`](ZAuth::tick) and
+//! changes), may wrap services and install a refresh gate, a
+//! second-factor gate or a serving fence, and are driven by
+//! [`ZAuth::start`], [`tick`](ZAuth::tick) and
 //! [`shutdown`](ZAuth::shutdown).  Clustering — shared mode and
-//! federation mode — lives in the separate `z-auth-cluster` crate, which
-//! the service application imports when it needs it.
+//! federation mode — lives in the separate `z-auth-cluster` crate, and
+//! two-factor authentication in `z-auth-mfa`; the service application
+//! imports them when it needs them.
+//!
+//! ## Login
+//!
+//! [`login`](security::authentication::AuthenticationService::login)
+//! returns a [`LoginOutcome`](security::authentication::LoginOutcome):
+//! tokens, or — with a second-factor gate installed — a challenge that
+//! [`complete_login`](security::authentication::AuthenticationService::complete_login)
+//! answers.  Access tokens carry the session's authentication methods
+//! (`amr`); [`Authorizer::require_mfa`](security::authorization::Authorizer::require_mfa)
+//! checks them.
 //!
 //! ## Features
 //!

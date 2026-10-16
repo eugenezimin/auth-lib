@@ -103,6 +103,7 @@ async fn user_scope_revocation_denies_older_tokens_only() {
         .authentication()
         .login(support::credentials("a@example.com"), support::ctx(IP_A))
         .await
+        .and_then(LoginOutcome::into_tokens)
         .unwrap();
     s.auth.verifier().verify(&fresh.access_token).unwrap();
 }

@@ -18,7 +18,13 @@
 //! auth.start().await?;                  // once: load state, start the extensions
 //! // periodically (e.g. every heartbeat): auth.tick().await?;
 //! // on shutdown:                      auth.shutdown().await?;
-//! let pair = auth.authentication().login(credentials, ctx).await?;
+//! match auth.authentication().login(credentials, ctx.clone()).await? {
+//!     LoginOutcome::Tokens(pair) => { /* logged in */ }
+//!     LoginOutcome::SecondFactor(challenge) => {
+//!         // ask for a code, then:
+//!         let pair = auth.authentication().complete_login(proof, ctx).await?;
+//!     }
+//! }
 //! ```
 
 use std::any::Any;
@@ -444,6 +450,7 @@ impl ZAuthBuilder {
             permissions,
             accounts,
             gate: None,
+            second_factor: None,
             load_catalog: false,
         };
         for ext in &self.extensions {
@@ -453,6 +460,7 @@ impl ZAuthBuilder {
             permissions,
             accounts,
             gate,
+            second_factor,
             load_catalog,
             ..
         } = assemble;
@@ -474,6 +482,10 @@ impl ZAuthBuilder {
         );
         let authentication = match gate {
             Some(gate) => authentication.with_gate(gate),
+            None => authentication,
+        };
+        let authentication = match second_factor {
+            Some(gate) => authentication.with_second_factor(gate),
             None => authentication,
         };
         let users: Arc<dyn UserService> = Arc::new(UserServiceImpl::new(

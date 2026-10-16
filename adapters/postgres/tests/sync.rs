@@ -11,7 +11,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::time::Duration;
 
 use uuid::Uuid;
-use z_auth::security::authentication::ClientContext;
+use z_auth::security::authentication::{ClientContext, LoginOutcome};
 use z_auth::security::session::RevocationReason;
 use z_auth::security::session::{RotateOutcome, SessionLifetimes, SessionRepository};
 use z_auth::security::token::{
@@ -281,6 +281,7 @@ async fn test_session_round_trip_cas_and_session_store_schema() {
             ClientContext::new(IP).with_fingerprint("device"),
         )
         .await
+        .and_then(LoginOutcome::into_tokens)
         .unwrap();
     let sid = pair.session_id;
 

@@ -18,8 +18,8 @@
 //! ```
 
 use crate::controller::api::dto::{
-    LoginRequest, PermissionCatalogResponse, RefreshRequest, RegisterRequest, RevokeRequest,
-    RevokeResponse, TokenPairResponse, UserResponse,
+    CompleteLoginRequest, LoginRequest, LoginResponse, PermissionCatalogResponse, RefreshRequest,
+    RegisterRequest, RevokeRequest, RevokeResponse, TokenPairResponse, UserResponse,
 };
 use crate::controller::api::error::ApiError;
 use crate::identity::user::service::UserService;
@@ -36,13 +36,23 @@ pub async fn register(
     Ok(users.register(req.into()).await?.into())
 }
 
-/// `POST /login`
+/// `POST /login` — tokens, or a challenge when a second factor is needed.
 pub async fn login(
     auth: &dyn AuthenticationService,
     req: LoginRequest,
     ctx: ClientContext,
-) -> Result<TokenPairResponse, ApiError> {
+) -> Result<LoginResponse, ApiError> {
     Ok(auth.login(req.into(), ctx).await?.into())
+}
+
+/// `POST /login/second-factor` — complete a login with the challenge token
+/// and a code.
+pub async fn complete_login(
+    auth: &dyn AuthenticationService,
+    req: CompleteLoginRequest,
+    ctx: ClientContext,
+) -> Result<TokenPairResponse, ApiError> {
+    Ok(auth.complete_login(req.into(), ctx).await?.into())
 }
 
 /// `POST /refresh` — the only endpoint that touches session storage.

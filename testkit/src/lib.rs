@@ -138,6 +138,7 @@ pub async fn register_and_login(auth: &ZAuth, email: &str, ip: IpAddr) -> (User,
         .authentication()
         .login(credentials(email), ctx(ip))
         .await
+        .and_then(LoginOutcome::into_tokens)
         .expect("login");
     (user, pair)
 }

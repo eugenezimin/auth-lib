@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use uuid::Uuid;
 use z_auth::identity::user::{RegisterUser, UpdateUser};
-use z_auth::security::authentication::{ClientContext, Credentials};
+use z_auth::security::authentication::{ClientContext, Credentials, LoginOutcome};
 use z_auth::security::session::RevocationReason;
 use z_auth::security::session::{
     IssueContext, NewSession, RotateOutcome, SessionLifetimes, SessionRepository, SessionStatus,
@@ -69,6 +69,7 @@ async fn login(service: &z_auth::ZAuth) -> (Uuid, z_auth::security::authenticati
             ClientContext::new(IP).with_user_agent("integration-test"),
         )
         .await
+        .and_then(LoginOutcome::into_tokens)
         .expect("login");
     (user.id, pair)
 }

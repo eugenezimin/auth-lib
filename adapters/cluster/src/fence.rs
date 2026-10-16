@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use z_auth::security::authentication::{
-    AuthenticationService, ClientContext, Credentials, TokenPair,
+    AuthenticationService, ClientContext, Credentials, LoginOutcome, SecondFactorProof, TokenPair,
 };
 use z_auth::security::session::RevocationReason;
 use z_auth::security::token::TokenRevocationService;
@@ -32,9 +32,18 @@ impl AuthenticationService for FencedAuthentication {
         &self,
         credentials: Credentials,
         ctx: ClientContext,
-    ) -> Result<TokenPair, AuthError> {
+    ) -> Result<LoginOutcome, AuthError> {
         check(&self.fenced)?;
         self.inner.login(credentials, ctx).await
+    }
+
+    async fn complete_login(
+        &self,
+        proof: SecondFactorProof,
+        ctx: ClientContext,
+    ) -> Result<TokenPair, AuthError> {
+        check(&self.fenced)?;
+        self.inner.complete_login(proof, ctx).await
     }
 
     async fn refresh(

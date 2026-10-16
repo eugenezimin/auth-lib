@@ -5,7 +5,9 @@ use std::time::Duration;
 use async_trait::async_trait;
 use uuid::Uuid;
 
-use crate::security::authentication::model::{ClientContext, Credentials, TokenPair};
+use crate::security::authentication::model::{
+    ClientContext, Credentials, LoginOutcome, SecondFactorProof, TokenPair,
+};
 use crate::security::token::model::Claims;
 use crate::utils::error::AuthError;
 
@@ -13,9 +15,25 @@ use crate::utils::error::AuthError;
 pub trait AuthenticationService: Send + Sync {
     /// Verify credentials, open a new session and issue its first pair.
     /// Evicts the user's oldest sessions beyond `max_sessions_per_user`.
+    ///
+    /// With a [`SecondFactorGate`] installed (e.g. by z-auth-mfa) the
+    /// password may only earn a [`LoginOutcome::SecondFactor`] challenge:
+    /// no session is opened (and none evicted) until
+    /// [`complete_login`](Self::complete_login) succeeds.
+    ///
+    /// [`SecondFactorGate`]: crate::security::authentication::SecondFactorGate
     async fn login(
         &self,
         credentials: Credentials,
+        ctx: ClientContext,
+    ) -> Result<LoginOutcome, AuthError>;
+
+    /// Second step of a login that returned [`LoginOutcome::SecondFactor`]:
+    /// verify the proof, then open the session as [`login`](Self::login)
+    /// would.  Its tokens carry `amr` with `mfa`.
+    async fn complete_login(
+        &self,
+        proof: SecondFactorProof,
         ctx: ClientContext,
     ) -> Result<TokenPair, AuthError>;
 

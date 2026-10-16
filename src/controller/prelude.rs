@@ -16,7 +16,9 @@ pub use crate::identity::user::{
     UserUpdate, UserWithRoles,
 };
 pub use crate::security::authentication::{
-    AuthenticationService, ClientContext, Credentials, TokenPair,
+    AuthenticationService, ChallengeDelivery, ClientContext, Credentials, LoginChallenge,
+    LoginOutcome, SecondFactorDecision, SecondFactorGate, SecondFactorProof, TokenPair,
+    VerifiedSecondFactor,
 };
 pub use crate::security::authorization::{
     Authorizer, EffectivePermissions, GrantView, NewPermission, Permission, PermissionCatalog,

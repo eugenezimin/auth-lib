@@ -270,6 +270,15 @@ async fn a_missing_instance_is_evicted_retired_and_fences_itself() {
         c.authentication().refresh("a", "b", ctx(IP_A)).await,
         Err(AuthError::NodeFenced)
     ));
+    let proof = SecondFactorProof {
+        challenge_token: "mfa1.x.y".into(),
+        method: None,
+        code: "123456".into(),
+    };
+    assert!(matches!(
+        c.authentication().complete_login(proof, ctx(IP_A)).await,
+        Err(AuthError::NodeFenced)
+    ));
     let _ = (a, b);
 }
 
