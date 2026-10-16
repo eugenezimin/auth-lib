@@ -226,20 +226,70 @@ fn load_env() {
         return;
     }
     let content = std::fs::read_to_string(path).expect("Failed to read .env file");
-    for line in content.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        if let Some((key, value)) = line.split_once('=') {
-            let key = key.trim();
-            let value = value.trim().trim_matches('"').trim_matches('\'');
-            if std::env::var(key).is_err() {
-                unsafe { std::env::set_var(key, value) };
-            }
+    for (key, value) in content.lines().filter_map(parse_env_line) {
+        if std::env::var(key).is_err() {
+            unsafe { std::env::set_var(key, value) };
         }
     }
     println!("  ✓ Loaded .env");
+}
+
+/// Parses one `.env` line into its key and value.
+///
+/// Blank lines, `#` comments and lines without `=` yield `None`.  A value in
+/// matching single or double quotes is taken as written (double quotes also
+/// accept `\"` and `\\`), and whatever follows the closing quote is ignored.
+/// An unquoted value ends at a `#` preceded by whitespace, so
+/// `DB_NAME=auth  # optional` is `auth` while `DB_PASSWORD=pa#ss` keeps its `#`.
+fn parse_env_line(line: &str) -> Option<(&str, String)> {
+    let line = line.trim();
+    if line.is_empty() || line.starts_with('#') {
+        return None;
+    }
+    let (key, raw) = line.split_once('=')?;
+    let key = key.trim();
+    if key.is_empty() {
+        return None;
+    }
+    Some((key, parse_env_value(raw)))
+}
+
+fn parse_env_value(raw: &str) -> String {
+    let value = raw.trim_start();
+    if let Some(quote) = value.chars().next().filter(|c| matches!(c, '"' | '\''))
+        && let Some(inner) = unquote(&value[1..], quote)
+    {
+        return inner;
+    }
+    // Unquoted (or an unclosed quote): a `#` after whitespace starts a comment.
+    let mut after_space = value.len() != raw.len();
+    for (i, c) in value.char_indices() {
+        if c == '#' && after_space {
+            return value[..i].trim_end().to_string();
+        }
+        after_space = c.is_whitespace();
+    }
+    value.trim_end().to_string()
+}
+
+/// The text up to the closing `quote`, or `None` if the quote is never closed.
+fn unquote(rest: &str, quote: char) -> Option<String> {
+    let mut out = String::new();
+    let mut chars = rest.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            c if c == quote => return Some(out),
+            '\\' if quote == '"' => match chars.next()? {
+                escaped @ ('"' | '\\') => out.push(escaped),
+                other => {
+                    out.push('\\');
+                    out.push(other);
+                }
+            },
+            c => out.push(c),
+        }
+    }
+    None
 }
 
 fn fatal(msg: &str) -> ! {
@@ -480,4 +530,105 @@ async fn apply_migrations(pool: &PgPool, migrator: &Migrator, set: &str) {
         .await
         .unwrap_or_else(|e| fatal(&format!("Migration failed: {e}")));
     println!("  ✓ Applied {} {set} migration(s).", pending.len());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_env_line;
+
+    fn parsed(line: &str) -> Option<(String, String)> {
+        parse_env_line(line).map(|(k, v)| (k.to_string(), v))
+    }
+
+    fn value(line: &str) -> String {
+        parse_env_line(line).expect("a key and value").1
+    }
+
+    #[test]
+    fn skips_blank_lines_comments_and_lines_without_a_key() {
+        assert_eq!(parsed(""), None);
+        assert_eq!(parsed("   "), None);
+        assert_eq!(parsed("# DB_HOST=localhost"), None);
+        assert_eq!(parsed("   # indented comment"), None);
+        assert_eq!(parsed("NOT_AN_ASSIGNMENT"), None);
+        assert_eq!(parsed("=value"), None);
+    }
+
+    #[test]
+    fn trims_the_key_and_a_plain_value() {
+        assert_eq!(
+            parsed("  DB_HOST =  localhost  "),
+            Some(("DB_HOST".into(), "localhost".into()))
+        );
+        assert_eq!(value("DB_PASSWORD="), "");
+        assert_eq!(
+            value("URL=postgres://u:p@h/db?a=b"),
+            "postgres://u:p@h/db?a=b"
+        );
+    }
+
+    #[test]
+    fn strips_inline_comments_after_whitespace() {
+        assert_eq!(
+            value("DB_NAME=auth                  # optional – defaults to \"auth\" if omitted"),
+            "auth"
+        );
+        assert_eq!(value("DB_MAX_POOL_SIZE=10           # optional"), "10");
+        assert_eq!(value("DB_PORT=5432\t# tab before the comment"), "5432");
+        assert_eq!(
+            value("AUTH_JWT_SIGNING_KEY=   # paste the keygen output here"),
+            ""
+        );
+    }
+
+    #[test]
+    fn keeps_a_hash_that_is_part_of_the_value() {
+        assert_eq!(value("DB_PASSWORD=pa#ss"), "pa#ss");
+        assert_eq!(value("DB_PASSWORD=#secret"), "#secret");
+        assert_eq!(value("DB_PASSWORD=pa#ss # comment"), "pa#ss");
+    }
+
+    #[test]
+    fn takes_quoted_values_as_written() {
+        assert_eq!(
+            value("DB_PASSWORD=\"s3cr3t # not a comment\""),
+            "s3cr3t # not a comment"
+        );
+        assert_eq!(value("DB_PASSWORD='it''s'  # trailing comment"), "it");
+        assert_eq!(value("DB_PASSWORD='C:\\path'"), "C:\\path");
+        assert_eq!(value("DB_PASSWORD=\"  padded  \"  # comment"), "  padded  ");
+        assert_eq!(
+            value("DB_PASSWORD=\"say \\\"hi\\\" \\\\ ok\""),
+            "say \"hi\" \\ ok"
+        );
+        assert_eq!(value("DB_PASSWORD=\"a\\nb\""), "a\\nb");
+        assert_eq!(value("DB_PASSWORD=\"\""), "");
+    }
+
+    #[test]
+    fn leaves_an_unclosed_quote_in_the_value() {
+        assert_eq!(value("DB_PASSWORD=\"abc"), "\"abc");
+        assert_eq!(value("DB_PASSWORD='abc  # comment"), "'abc");
+    }
+
+    #[test]
+    fn env_example_parses_without_comment_residue() {
+        let example = include_str!("../../../../env.example");
+        let pairs: Vec<(&str, String)> = example.lines().filter_map(parse_env_line).collect();
+        let get = |key: &str| {
+            pairs
+                .iter()
+                .find(|(k, _)| *k == key)
+                .map(|(_, v)| v.as_str())
+                .unwrap_or_else(|| panic!("{key} missing from env.example"))
+        };
+        assert_eq!(get("DB_HOST"), "localhost");
+        assert_eq!(get("DB_NAME"), "auth");
+        assert_eq!(get("DB_PORT").parse::<u16>(), Ok(5432));
+        assert_eq!(get("DB_MAX_POOL_SIZE").parse::<u32>(), Ok(10));
+        assert_eq!(get("DB_CONNECT_TIMEOUT_SECS").parse::<u64>(), Ok(5));
+        for (key, value) in &pairs {
+            assert!(!value.contains('#'), "{key} kept a comment: {value:?}");
+        }
+    }
 }
