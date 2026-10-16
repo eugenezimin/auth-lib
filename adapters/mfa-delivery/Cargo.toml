@@ -1,0 +1,40 @@
+[package]
+name = "z-auth-mfa-delivery"
+version = "0.3.0"
+edition = "2024"
+description = "Email and SMS delivery for z-auth-mfa codes: SMTP, SendGrid, Postmark, Mailgun, Twilio and a signed webhook"
+
+[features]
+default = ["smtp", "sendgrid", "postmark", "mailgun", "twilio", "webhook"]
+# Email through any SMTP server (lettre, rustls).
+smtp = ["dep:lettre"]
+# Email through provider APIs.
+sendgrid = ["http"]
+postmark = ["http"]
+mailgun = ["http"]
+# SMS through Twilio Programmable Messaging.
+twilio = ["http"]
+# SMS as a JSON POST to your own gateway, signed with HMAC-SHA256.
+webhook = ["http", "dep:hmac", "dep:sha2", "dep:hex"]
+# Internal: the HTTP client shared by the API providers.
+http = ["dep:reqwest"]
+
+[dependencies]
+z-auth      = { path = "../..", default-features = false }
+z-auth-mfa  = { path = "../mfa", default-features = false }
+async-trait = "0.1.89"
+chrono      = { version = "0.4", default-features = false, features = ["clock", "std"] }
+serde_json  = "1"
+tracing     = "0.1"
+# rustls with the aws-lc-rs provider and the platform's certificate store,
+# for both SMTP and HTTPS.
+lettre  = { version = "0.11", optional = true, default-features = false, features = ["builder", "hostname", "smtp-transport", "tokio1-rustls", "aws-lc-rs", "rustls-platform-verifier"] }
+reqwest = { version = "0.13", optional = true, default-features = false, features = ["rustls", "json", "form"] }
+hmac    = { version = "0.13", optional = true }
+sha2    = { version = "0.11", optional = true }
+hex     = { version = "0.4", optional = true }
+
+[dev-dependencies]
+tokio    = { version = "1", features = ["macros", "rt-multi-thread"] }
+uuid     = { version = "1", features = ["v4"] }
+wiremock = "0.6"
