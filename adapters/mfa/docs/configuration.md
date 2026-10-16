@@ -85,7 +85,7 @@ The table lists every variable read by `MfaEnvLoader`, its default, and what `bu
 | `AUTH_MFA_PURGE_INTERVAL_SECS` | `300` | 1 or more | Minimum time between purges in `ZAuth::tick` |
 | `AUTH_MFA_PURGE_RETENTION_SECS` | `86400` | 0 or more | How long expired or consumed rows are kept before the purge deletes them |
 
-A commented template of all these variables is part of the repository's `env.example`. The same file also lists the delivery variables, such as `AUTH_MFA_EMAIL_PROVIDER` and `AUTH_MFA_SMS_PROVIDER`, which share the prefix but are read by z-auth-mfa-delivery rather than by `MfaEnvLoader`. They are documented in its [configuration guide](../../mfa-delivery/docs/configuration.md).
+A commented template of all these variables is part of the repository's `env.example`. The same file also lists the delivery variables, such as `AUTH_MFA_EMAIL_PROVIDER` and `AUTH_MFA_SMS_PROVIDER`, which share the prefix but are read by z-auth-mfa-sender rather than by `MfaEnvLoader`. They are documented in its [configuration guide](../delivery/docs/configuration.md).
 
 ## Enforcement
 

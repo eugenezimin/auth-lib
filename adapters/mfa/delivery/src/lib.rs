@@ -1,4 +1,4 @@
-//! z-auth-mfa-delivery — delivers z-auth-mfa's email and SMS codes.
+//! z-auth-mfa-sender — delivers z-auth-mfa's email and SMS codes.
 //!
 //! z-auth-mfa generates, stores and checks codes and leaves delivery to a
 //! [`CodeSender`](z_auth_mfa::CodeSender).  This crate provides one per
@@ -17,12 +17,12 @@
 //! use std::sync::Arc;
 //! use z_auth_mfa::Mfa;
 //! use z_auth_mfa::config::{MfaConfigLoader, MfaEnvLoader};
-//! use z_auth_mfa_delivery::DeliveryConfig;
+//! use z_auth_mfa_sender::DeliveryConfig;
 //! # let repo: Arc<dyn z_auth_mfa::MfaRepository> = unimplemented!();
 //!
 //! let delivery = DeliveryConfig::from_env()?;               // AUTH_MFA_*_PROVIDER, …
 //! let mfa = Mfa::new(MfaEnvLoader.load_settings()?, repo)
-//!     .with_code_sender(z_auth_mfa_delivery::build(&delivery)?);
+//!     .with_code_sender(z_auth_mfa_sender::build(&delivery)?);
 //! # Ok(()) }
 //! ```
 //!

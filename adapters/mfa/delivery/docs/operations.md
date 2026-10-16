@@ -11,7 +11,7 @@ sequenceDiagram
     participant C as Client
     participant H as Host HTTP handler
     participant S as MfaServiceImpl
-    participant D as z-auth-mfa-delivery
+    participant D as z-auth-mfa-sender
     participant P as Provider
     C->>H: POST /login/second-factor/code
     H->>S: send_login_code
@@ -24,7 +24,7 @@ sequenceDiagram
     H-->>C: 200 or 503 code_delivery_failed
 ```
 
-A host that would rather never wait can implement `CodeSender` itself, enqueue the delivery and return at once, as the [ports guide](../../mfa/docs/ports.md) notes. It then gives up reporting delivery failures to the user, and the queue becomes a store of plaintext codes that needs the same care as the codes themselves.
+A host that would rather never wait can implement `CodeSender` itself, enqueue the delivery and return at once, as the [ports guide](../../docs/ports.md) notes. It then gives up reporting delivery failures to the user, and the queue becomes a store of plaintext codes that needs the same care as the codes themselves.
 
 ## Timeouts
 
@@ -57,7 +57,7 @@ impl CodeSender for Deadline {
 }
 ```
 
-It is registered with `Mfa::with_code_sender(Arc::new(Deadline { inner: z_auth_mfa_delivery::build(&delivery)?, limit }))`. Dropping an SMTP send midway simply closes its connection, since every message uses a fresh one.
+It is registered with `Mfa::with_code_sender(Arc::new(Deadline { inner: z_auth_mfa_sender::build(&delivery)?, limit }))`. Dropping an SMTP send midway simply closes its connection, since every message uses a fresh one.
 
 The right value is a few seconds, comfortably below the request timeout of the host's HTTP server and of any proxy in front of it, so that the user sees a clean `code_delivery_failed` rather than a gateway timeout. A user who received no code can ask for another once the resend cooldown has passed, which is usually a better experience than a long wait.
 
@@ -93,20 +93,20 @@ stateDiagram-v2
 
 The limits apply per sign-in attempt, not per method. Login codes are stored on the login challenge, so the cooldown and the send count are shared by every code of that challenge, whatever its channel. When the gate has automatically sent a code by email and the user would rather receive it by SMS, the request for the SMS code has to wait for the cooldown as well. Clients should therefore show the remaining wait rather than offering an immediate switch. Enrollment and step-up codes are stored on the factor instead, so their limits apply per factor.
 
-An automatic code that fails at login is a special case. The login itself then fails with `code_delivery_failed` and the client receives no challenge token, so the user simply starts over with the password, which creates a new challenge with fresh limits. The [login flow guide](../../mfa/docs/login-flow.md) describes the sequence.
+An automatic code that fails at login is a special case. The login itself then fails with `code_delivery_failed` and the client receives no challenge token, so the user simply starts over with the password, which creates a new challenge with fresh limits. The [login flow guide](../../docs/login-flow.md) describes the sequence.
 
 ## Logging
 
 The crate logs through `tracing` and never installs a subscriber, so what appears where is decided by the host's subscriber configuration. The events come from two modules, which makes them easy to filter.
 
-The real providers never log a code or a full destination. After a successful send, the `MethodRouter` emits one event at `DEBUG` level with the message `second-factor code sent` and the fields `provider`, `method`, `purpose` and `to`, where `to` is the destination masked by `mask`. An email address keeps its first character and its domain, so `bob@example.com` becomes `b***@example.com`, and a phone number keeps its last four digits, so `+15555550100` becomes `***0100`. That is enough to tell destinations apart while following a support case, without recording them. The event's target is `z_auth_mfa_delivery::router`. Senders obtained from `email_sender` or `sms_sender` are not wrapped in the router and emit no such event. Failures are not logged by the crate, as explained above.
+The real providers never log a code or a full destination. After a successful send, the `MethodRouter` emits one event at `DEBUG` level with the message `second-factor code sent` and the fields `provider`, `method`, `purpose` and `to`, where `to` is the destination masked by `mask`. An email address keeps its first character and its domain, so `bob@example.com` becomes `b***@example.com`, and a phone number keeps its last four digits, so `+15555550100` becomes `***0100`. That is enough to tell destinations apart while following a support case, without recording them. The event's target is `z_auth_mfa_sender::router`. Senders obtained from `email_sender` or `sms_sender` are not wrapped in the router and emit no such event. Failures are not logged by the crate, as explained above.
 
-The `log` provider is the exception, by design. It delivers nothing and instead emits a `WARN` event with the message `DEV ONLY: second-factor code not delivered` and the fields `user_id`, `method`, `destination`, `code`, `purpose` and `expires_at`, under the target `z_auth_mfa_delivery::log`. That makes the whole flow usable on a laptop without any provider account. It also means that anyone who can read the logs can complete a sign-in as any user, which is why the provider is for development only. Because `log` is the default for both methods, a production deployment must set `AUTH_MFA_EMAIL_PROVIDER` and `AUTH_MFA_SMS_PROVIDER` explicitly, and a host may want to refuse to start in production when `email.name()` or `sms.name()` of its `DeliveryConfig` returns `log`. Conversely, a developer who sees no code needs a `tracing` subscriber that shows `WARN` events from this crate.
+The `log` provider is the exception, by design. It delivers nothing and instead emits a `WARN` event with the message `DEV ONLY: second-factor code not delivered` and the fields `user_id`, `method`, `destination`, `code`, `purpose` and `expires_at`, under the target `z_auth_mfa_sender::log`. That makes the whole flow usable on a laptop without any provider account. It also means that anyone who can read the logs can complete a sign-in as any user, which is why the provider is for development only. Because `log` is the default for both methods, a production deployment must set `AUTH_MFA_EMAIL_PROVIDER` and `AUTH_MFA_SMS_PROVIDER` explicitly, and a host may want to refuse to start in production when `email.name()` or `sms.name()` of its `DeliveryConfig` returns `log`. Conversely, a developer who sees no code needs a `tracing` subscriber that shows `WARN` events from this crate.
 
 With a typical `tracing-subscriber` setup that honours `RUST_LOG`, the following filter shows both the development codes and the masked confirmation of real sends.
 
 ```sh
-RUST_LOG=info,z_auth_mfa_delivery=debug
+RUST_LOG=info,z_auth_mfa_sender=debug
 ```
 
 ## TLS
@@ -120,13 +120,13 @@ For SMTP, the certificate is checked against `AUTH_MFA_SMTP_HOST`, in both the `
 The crate's tests need no network access and no provider accounts. The main suite, `tests/delivery.rs`, starts a local `wiremock` server for each HTTP provider and checks the exact requests, including headers, authentication, form fields and JSON bodies, the webhook signature against a known vector, failures becoming `CodeDeliveryFailed`, SMTP message construction and transport setup for all three security modes (without connecting), routing by method, destination masking, the message texts and the configuration loader. It is compiled only when all six provider features are on, which is the default.
 
 ```sh
-cargo test -p z-auth-mfa-delivery
+cargo test -p z-auth-mfa-sender
 ```
 
 The second suite, `tests/features.rs`, checks that a provider which is not compiled in is refused, both by `DeliveryConfig::from_lookup` and by `build`, and that `log` works without any feature. It is compiled only when the `smtp` feature is off, so it needs a build without default features. Any feature set that leaves out `smtp` works, and `twilio` is the conventional choice.
 
 ```sh
-cargo test -p z-auth-mfa-delivery --no-default-features --features twilio
+cargo test -p z-auth-mfa-sender --no-default-features --features twilio
 ```
 
-The workspace's CI runs the first suite as part of `cargo test --workspace --exclude z-auth-postgres --all-features`, and its cargo-hack job compiles the crate with each feature on its own, but it does not run the second suite. Run it locally after changing anything that is gated by a feature. The [development guide](../../../docs/development.md) describes the CI jobs in full.
+The workspace's CI runs the first suite as part of `cargo test --workspace --exclude z-auth-postgres --all-features`, and its cargo-hack job compiles the crate with each feature on its own, but it does not run the second suite. Run it locally after changing anything that is gated by a feature. The [development guide](../../../../docs/development.md) describes the CI jobs in full.

@@ -1,8 +1,8 @@
-# z-auth-mfa-delivery
+# z-auth-mfa-sender
 
-`z-auth-mfa` generates email and SMS codes, stores their keyed hashes and checks what the user types, but it never talks to a mail server or an SMS gateway. Every code it wants delivered is handed to a `CodeSender`, a one-method port the host supplies through `Mfa::with_code_sender`. `z-auth-mfa-delivery` is a ready-made `CodeSender`. It covers the common providers, composes the message text for each purpose, and is configured through its own `AUTH_MFA_*` variables, so a host that is content with SMTP, SendGrid, Postmark, Mailgun, Twilio or a signed webhook does not have to write delivery code at all.
+`z-auth-mfa` generates email and SMS codes, stores their keyed hashes and checks what the user types, but it never talks to a mail server or an SMS gateway. Every code it wants delivered is handed to a `CodeSender`, a one-method port the host supplies through `Mfa::with_code_sender`. `z-auth-mfa-sender` is a ready-made `CodeSender`. It covers the common providers, composes the message text for each purpose, and is configured through its own `AUTH_MFA_*` variables, so a host that is content with SMTP, SendGrid, Postmark, Mailgun, Twilio or a signed webhook does not have to write delivery code at all.
 
-The crate sits beside `z-auth-mfa` rather than inside it. `AUTH_MFA_METHODS`, read by `z-auth-mfa`, decides which methods users can enroll. The variables described here decide how the resulting codes leave the service. A host with its own delivery pipeline can ignore this crate and implement `CodeSender` directly, as the [ports guide](../mfa/docs/ports.md) shows.
+The crate is a subcrate of `z-auth-mfa`. It lives in that crate's `delivery` directory but is a package of its own, because it builds on the `CodeSender` port that `z-auth-mfa` defines and a host that delivers codes itself should not compile it. `AUTH_MFA_METHODS`, read by `z-auth-mfa`, decides which methods users can enroll. The variables described here decide how the resulting codes leave the service. A host with its own delivery pipeline can ignore this crate and implement `CodeSender` directly, as the [ports guide](../docs/ports.md) shows.
 
 ## Where it fits
 
@@ -58,16 +58,16 @@ Every provider except `log` is a Cargo feature of the same name, and all six are
 
 `http` is an internal feature. It is enabled by the providers that need it and is not meant to be selected directly. `log` needs no feature and is always available.
 
-The configuration types are compiled regardless of features, so `EmailProvider::Smtp` exists even in a build without `smtp`. Selecting a provider that is not compiled in is therefore a configuration error rather than a compile error. `DeliveryConfig::from_env` rejects it with a `ConfigError` on the selecting variable, and `build` rejects a `DeliveryConfig` built in code with `AuthError::Config`, both with the message ``z-auth-mfa-delivery was built without the `smtp` feature`` (naming the provider in question).
+The configuration types are compiled regardless of features, so `EmailProvider::Smtp` exists even in a build without `smtp`. Selecting a provider that is not compiled in is therefore a configuration error rather than a compile error. `DeliveryConfig::from_env` rejects it with a `ConfigError` on the selecting variable, and `build` rejects a `DeliveryConfig` built in code with `AuthError::Config`, both with the message ``z-auth-mfa-sender was built without the `smtp` feature`` (naming the provider in question).
 
 A host that only sends email through Postmark and SMS through Twilio would declare the dependency as follows. The path assumes the z-auth workspace is checked out next to the host crate, so adjust it to your layout.
 
 ```toml
 [dependencies]
-z-auth-mfa-delivery = { path = "z-auth/adapters/mfa-delivery", default-features = false, features = ["postmark", "twilio"] }
+z-auth-mfa-sender = { path = "z-auth/adapters/mfa/delivery", default-features = false, features = ["postmark", "twilio"] }
 ```
 
-The crate depends on `z-auth` and `z-auth-mfa` with their default features off, so it never adds features to them. In particular it does not enable `z-auth-mfa`'s `aead` sealer, which remains the host's decision as described in the [z-auth-mfa guide](../mfa/README.md).
+The crate depends on `z-auth` and `z-auth-mfa` with their default features off, so it never adds features to them. In particular it does not enable `z-auth-mfa`'s `aead` sealer, which remains the host's decision as described in the [z-auth-mfa guide](../README.md).
 
 ## Wiring
 
@@ -78,13 +78,13 @@ use std::sync::Arc;
 
 use z_auth_mfa::config::{MfaConfigLoader, MfaEnvLoader};
 use z_auth_mfa::{Mfa, MfaRepository};
-use z_auth_mfa_delivery::DeliveryConfig;
+use z_auth_mfa_sender::DeliveryConfig;
 
 fn mfa_extension(repo: Arc<dyn MfaRepository>) -> Result<Arc<Mfa>, Box<dyn std::error::Error>> {
     let delivery = DeliveryConfig::from_env()?; // AUTH_MFA_EMAIL_PROVIDER, AUTH_MFA_SMS_PROVIDER, ...
     let mfa = Arc::new(
         Mfa::new(MfaEnvLoader.load_settings()?, repo)
-            .with_code_sender(z_auth_mfa_delivery::build(&delivery)?),
+            .with_code_sender(z_auth_mfa_sender::build(&delivery)?),
     );
     Ok(mfa)
 }
@@ -98,11 +98,11 @@ fn mfa_extension(repo: Arc<dyn MfaRepository>) -> Result<Arc<Mfa>, Box<dyn std::
 use std::sync::Arc;
 
 use z_auth_mfa::CodeSender;
-use z_auth_mfa_delivery::DeliveryConfig;
+use z_auth_mfa_sender::DeliveryConfig;
 
 fn sms_only() -> Result<Arc<dyn CodeSender>, Box<dyn std::error::Error>> {
     let delivery = DeliveryConfig::from_env()?;
-    Ok(z_auth_mfa_delivery::sms_sender(&delivery)?)
+    Ok(z_auth_mfa_sender::sms_sender(&delivery)?)
 }
 ```
 
@@ -115,7 +115,7 @@ fn sms_only() -> Result<Arc<dyn CodeSender>, Box<dyn std::error::Error>> {
 ```rust
 use std::collections::HashMap;
 
-use z_auth_mfa_delivery::DeliveryConfig;
+use z_auth_mfa_sender::DeliveryConfig;
 
 fn from_secrets(vars: &HashMap<String, String>) -> Result<DeliveryConfig, z_auth::conf::config::ConfigError> {
     DeliveryConfig::from_lookup(|key| vars.get(key).cloned().or_else(|| std::env::var(key).ok()))
@@ -129,9 +129,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use z_auth_mfa::CodeSender;
-use z_auth_mfa_delivery::config::{PostmarkConfig, WebhookConfig};
-use z_auth_mfa_delivery::constants::POSTMARK_API;
-use z_auth_mfa_delivery::{DeliveryConfig, EmailProvider, Secret, SmsProvider};
+use z_auth_mfa_sender::config::{PostmarkConfig, WebhookConfig};
+use z_auth_mfa_sender::constants::POSTMARK_API;
+use z_auth_mfa_sender::{DeliveryConfig, EmailProvider, Secret, SmsProvider};
 
 fn sender(token: String, secret: String) -> Result<Arc<dyn CodeSender>, z_auth::AuthError> {
     let cfg = DeliveryConfig {
@@ -149,7 +149,7 @@ fn sender(token: String, secret: String) -> Result<Arc<dyn CodeSender>, z_auth::
             bearer_token: None,
         }),
     };
-    z_auth_mfa_delivery::build(&cfg)
+    z_auth_mfa_sender::build(&cfg)
 }
 ```
 
@@ -164,7 +164,7 @@ A send that does not succeed returns `AuthError::CodeDeliveryFailed`, whose deta
 Most hosts only touch the crate root. The provider structs live in `config`, and the sender types in `email` and `sms` are public for hosts that want to construct a single sender by hand.
 
 ```text
-z_auth_mfa_delivery
+z_auth_mfa_sender
 ├── DeliveryConfig, EmailProvider, SmsProvider, Secret   re-exported from config
 ├── LogCodeSender                                        re-exported from log
 ├── build, email_sender, sms_sender, MethodRouter, mask  re-exported from the private router module
@@ -185,4 +185,4 @@ Two types share the name `TwilioSender`. `config::TwilioSender` is the enum that
 
 The guides in `docs/` cover the crate in depth. The [configuration guide](docs/configuration.md) lists every variable with its default, its requirements and its validation, and explains the loaders and secret redaction. The [email guide](docs/email.md) describes the SMTP security modes, the three email APIs, the message format and local development with Mailpit. The [SMS guide](docs/sms.md) covers Twilio, the SMS text and the signed webhook, including how a receiver verifies the signature. The [operations guide](docs/operations.md) deals with timeouts, failure handling, logging, TLS, the resend cooldown and the test suites.
 
-For the side of the port that produces the codes, see the [z-auth-mfa guide](../mfa/README.md), its [ports guide](../mfa/docs/ports.md) for the `CodeSender` contract, its [login flow](../mfa/docs/login-flow.md) for when codes are sent, and its [configuration guide](../mfa/docs/configuration.md) for `AUTH_MFA_CODE_TTL_SECS`, `AUTH_MFA_CODE_RESEND_SECS` and the other code limits.
+For the side of the port that produces the codes, see the [z-auth-mfa guide](../README.md), its [ports guide](../docs/ports.md) for the `CodeSender` contract, its [login flow](../docs/login-flow.md) for when codes are sent, and its [configuration guide](../docs/configuration.md) for `AUTH_MFA_CODE_TTL_SECS`, `AUTH_MFA_CODE_RESEND_SECS` and the other code limits.

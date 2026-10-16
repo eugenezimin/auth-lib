@@ -15,7 +15,7 @@ The repository is a Cargo workspace. The root crate is the core, and the optiona
 | `z-auth` | `.` | The core. Registration, login, sessions, Ed25519 access tokens, HMAC refresh tokens, revocation, roles and permissions, the `ZAuth` facade and the `Extension` port |
 | `z-auth-cluster` | [`adapters/cluster`](adapters/cluster/README.md) | Optional clustering as an `Extension`, in shared mode (one database) or federation mode (one database per service) |
 | `z-auth-mfa` | [`adapters/mfa`](adapters/mfa/README.md) | Optional two-factor authentication as an `Extension`, with TOTP, email and SMS codes and recovery codes, configured through `AUTH_MFA_*` |
-| `z-auth-mfa-delivery` | [`adapters/mfa-delivery`](adapters/mfa-delivery/README.md) | Ready-made `CodeSender` implementations for z-auth-mfa's email and SMS codes, over SMTP, SendGrid, Postmark, Mailgun, Twilio or a signed webhook, chosen through `AUTH_MFA_EMAIL_PROVIDER` and `AUTH_MFA_SMS_PROVIDER` |
+| `z-auth-mfa-sender` | [`adapters/mfa/delivery`](adapters/mfa/delivery/README.md) | Ready-made `CodeSender` implementations for z-auth-mfa's email and SMS codes, over SMTP, SendGrid, Postmark, Mailgun, Twilio or a signed webhook, chosen through `AUTH_MFA_EMAIL_PROVIDER` and `AUTH_MFA_SMS_PROVIDER` |
 | `z-auth-postgres` | [`adapters/postgres`](adapters/postgres/README.md) | Reference PostgreSQL adapter on sqlx, with migrations and the `setup_db` binary, including the cluster and mfa stores behind features |
 | `z-auth-testkit` | `testkit` | In-memory adapters and helpers for the test suites, not published |
 
@@ -32,7 +32,7 @@ flowchart TB
     end
     cluster["z-auth-cluster (Extension)"]
     mfa["z-auth-mfa (Extension)"]
-    delivery["z-auth-mfa-delivery (CodeSender)"]
+    delivery["z-auth-mfa-sender (CodeSender)"]
     postgres["z-auth-postgres (repository adapters)"]
     testkit["z-auth-testkit (in-memory adapters)"]
     db[("PostgreSQL")]
@@ -101,7 +101,7 @@ The core guides live in [`docs/`](docs). They are meant to be read roughly in th
 | [Storage ports](docs/storage-ports.md) | The repository contracts for writing your own storage adapter |
 | [Development](docs/development.md) | Workspace layout, the testkit, running tests, CI and releases |
 
-Each adapter crate has its own guide set. The [PostgreSQL adapter](adapters/postgres/README.md) documents the schema, migrations and federation store, the [cluster extension](adapters/cluster/README.md) documents shared and federation mode, replication and deployment, the [mfa extension](adapters/mfa/README.md) documents the two-step login, enrollment and its security model, and [z-auth-mfa-delivery](adapters/mfa-delivery/README.md) documents the email and SMS providers that deliver its codes. The crate-level rustdoc (`cargo doc --open`) covers the API item by item.
+Each adapter crate has its own guide set. The [PostgreSQL adapter](adapters/postgres/README.md) documents the schema, migrations and federation store, the [cluster extension](adapters/cluster/README.md) documents shared and federation mode, replication and deployment, the [mfa extension](adapters/mfa/README.md) documents the two-step login, enrollment and its security model, and [z-auth-mfa-sender](adapters/mfa/delivery/README.md) documents the email and SMS providers that deliver its codes. The crate-level rustdoc (`cargo doc --open`) covers the API item by item.
 
 ## CI and releases
 

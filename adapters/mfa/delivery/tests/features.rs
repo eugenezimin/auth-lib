@@ -5,8 +5,8 @@
 
 use std::collections::HashMap;
 
-use z_auth_mfa_delivery::config::{SmtpConfig, SmtpSecurity};
-use z_auth_mfa_delivery::{DeliveryConfig, EmailProvider, Secret, build};
+use z_auth_mfa_sender::config::{SmtpConfig, SmtpSecurity};
+use z_auth_mfa_sender::{DeliveryConfig, EmailProvider, Secret, build};
 
 #[test]
 fn a_provider_that_is_not_compiled_in_is_refused() {

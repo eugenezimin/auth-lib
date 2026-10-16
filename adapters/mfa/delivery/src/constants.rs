@@ -1,4 +1,4 @@
-//! z-auth-mfa-delivery constants: defaults, provider endpoints and the
+//! z-auth-mfa-sender constants: defaults, provider endpoints and the
 //! `AUTH_MFA_*` environment variables read by
 //! [`DeliveryConfig::from_env`](crate::DeliveryConfig::from_env).
 

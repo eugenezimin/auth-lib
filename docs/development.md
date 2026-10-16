@@ -9,7 +9,7 @@ The repository is a Cargo workspace whose root package is the core crate. The me
 ```text
 z-auth/
 ├── Cargo.toml                    core package z-auth and the workspace definition
-├── env.example                   every variable read by the core, cluster, mfa, mfa-delivery and postgres crates
+├── env.example                   every variable read by the core, cluster, mfa, mfa-sender and postgres crates
 ├── examples/
 │   └── keygen.rs                 prints AUTH_JWT_SIGNING_KEY, AUTH_REFRESH_SECRET, AUTH_JWT_VERIFYING_KEYS
 ├── src/                          the core crate (see architecture.md)
@@ -28,7 +28,7 @@ z-auth/
 ├── adapters/
 │   ├── cluster/                  z-auth-cluster, shared and federation mode
 │   ├── mfa/                      z-auth-mfa, two-factor authentication, examples/mfa_keygen.rs
-│   ├── mfa-delivery/             z-auth-mfa-delivery, email and SMS CodeSender implementations
+│   │   └── delivery/             z-auth-mfa-sender, the subcrate with email and SMS CodeSender implementations
 │   └── postgres/                 z-auth-postgres, sqlx repositories, migrations, setup_db
 ├── .cargo/audit.toml             cargo-audit configuration
 └── .github/workflows/
@@ -55,7 +55,7 @@ flowchart LR
     core_tests["tests/ (z-auth)"] --> testkit
     cluster_tests["adapters/cluster/tests"] --> testkit
     mfa_tests["adapters/mfa/tests"] --> testkit
-    delivery_tests["adapters/mfa-delivery/tests"] --> mock["wiremock (local HTTP mock)"]
+    delivery_tests["adapters/mfa/delivery/tests"] --> mock["wiremock (local HTTP mock)"]
     pg_tests["adapters/postgres/tests"] --> pg[("PostgreSQL")]
 ```
 
@@ -69,7 +69,7 @@ cargo test --workspace --exclude z-auth-postgres --all-features
 
 Most core suites are compiled only with the `argon2` and `crypto` features, because the facade's defaults need them, and each such file says so with a `cfg` attribute at the top (`user_role.rs` needs only `argon2`, and `config_load.rs` has no gate). Running `cargo test` in the root package with default features covers them all.
 
-z-auth-mfa-delivery does not use the testkit. Its main suite runs every provider against a local `wiremock` server and needs all of its provider features, which the command above enables. A second suite checks that providers which are not compiled in are refused, and is compiled only without the `smtp` feature, so CI does not run it. Run it with `cargo test -p z-auth-mfa-delivery --no-default-features --features twilio` after changing the crate's feature gates, as its [operations guide](../adapters/mfa-delivery/docs/operations.md) explains.
+z-auth-mfa-sender does not use the testkit. Its main suite runs every provider against a local `wiremock` server and needs all of its provider features, which the command above enables. A second suite checks that providers which are not compiled in are refused, and is compiled only without the `smtp` feature, so CI does not run it. Run it with `cargo test -p z-auth-mfa-sender --no-default-features --features twilio` after changing the crate's feature gates, as its [operations guide](../adapters/mfa/delivery/docs/operations.md) explains.
 
 The PostgreSQL adapter's tests talk to a real database. Their helper reads the connection settings from the `DB_*` variables through `PgConfig::from_env`, falling back to a local default, and applies any pending migrations before each suite. Create the database once with `setup_db`, including the cluster and mfa sets, and then run the adapter's tests with all features, since several test files require the `shared`, `federation` or `mfa` feature.
 
@@ -83,7 +83,7 @@ The helpers are idempotent and safe to run in any order with several test thread
 
 ## Feature combinations
 
-Each crate has optional features (the core has `argon2`, `crypto` and `serde`, z-auth-cluster `shared` and `federation`, z-auth-mfa `aead`, z-auth-mfa-delivery `smtp`, `sendgrid`, `postmark`, `mailgun`, `twilio` and `webhook`, z-auth-postgres `shared`, `federation` and `mfa`), and every combination must compile. CI checks this with cargo-hack, which builds every crate with each feature on its own as well as with no default features, without dev-dependencies. Run the same check locally before changing feature gates.
+Each crate has optional features (the core has `argon2`, `crypto` and `serde`, z-auth-cluster `shared` and `federation`, z-auth-mfa `aead`, z-auth-mfa-sender `smtp`, `sendgrid`, `postmark`, `mailgun`, `twilio` and `webhook`, z-auth-postgres `shared`, `federation` and `mfa`), and every combination must compile. CI checks this with cargo-hack, which builds every crate with each feature on its own as well as with no default features, without dev-dependencies. Run the same check locally before changing feature gates.
 
 ```sh
 cargo install cargo-hack

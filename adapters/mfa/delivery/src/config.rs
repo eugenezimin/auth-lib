@@ -383,7 +383,7 @@ fn compiled(enabled: bool, key: &str, provider: &str) -> Result<(), ConfigError>
     } else {
         Err(invalid(
             key,
-            format!("z-auth-mfa-delivery was built without the `{provider}` feature"),
+            format!("z-auth-mfa-sender was built without the `{provider}` feature"),
         ))
     }
 }

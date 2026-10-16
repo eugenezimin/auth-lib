@@ -25,7 +25,7 @@ All three are standard base64. The signing seed and each verifying key must deco
 
 ## Prepare the environment
 
-`env.example` at the repository root lists every variable read by the core, by z-auth-cluster, by z-auth-mfa, by z-auth-mfa-delivery and by the PostgreSQL adapter, with the defaults as comments. Copy it to `.env`, paste the keys from `keygen`, and set the `DB_*` variables for your database.
+`env.example` at the repository root lists every variable read by the core, by z-auth-cluster, by z-auth-mfa, by z-auth-mfa-sender and by the PostgreSQL adapter, with the defaults as comments. Copy it to `.env`, paste the keys from `keygen`, and set the `DB_*` variables for your database.
 
 ```sh
 cp env.example .env

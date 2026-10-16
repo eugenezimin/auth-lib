@@ -108,7 +108,7 @@ The code is stored before it is delivered. If delivery then fails, the send stil
 
 ## The code sender
 
-`CodeSender` is how email and SMS codes leave the service. A ready-made implementation covering SMTP, SendGrid, Postmark, Mailgun, Twilio and a signed webhook is provided by [z-auth-mfa-delivery](../../mfa-delivery/README.md), so a host needs to implement the trait only when it wants its own delivery pipeline or message templates. The trait has a single method.
+`CodeSender` is how email and SMS codes leave the service. A ready-made implementation covering SMTP, SendGrid, Postmark, Mailgun, Twilio and a signed webhook is provided by [z-auth-mfa-sender](../delivery/README.md), so a host needs to implement the trait only when it wants its own delivery pipeline or message templates. The trait has a single method.
 
 ```rust
 #[async_trait]

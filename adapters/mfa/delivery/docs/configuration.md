@@ -1,8 +1,8 @@
 # Configuration
 
-`z-auth-mfa-delivery` is configured through a `DeliveryConfig` value, which names the email provider, the SMS provider, the sender name used in messages and the timeout of each send. The value is normally read from `AUTH_MFA_*` environment variables by `DeliveryConfig::from_env`, but it can equally be read from any other source with `DeliveryConfig::from_lookup` or built directly in code. This guide lists every variable with its default and validation rule, explains which variables each provider requires, and describes how errors are reported and how credentials are kept out of logs.
+`z-auth-mfa-sender` is configured through a `DeliveryConfig` value, which names the email provider, the SMS provider, the sender name used in messages and the timeout of each send. The value is normally read from `AUTH_MFA_*` environment variables by `DeliveryConfig::from_env`, but it can equally be read from any other source with `DeliveryConfig::from_lookup` or built directly in code. This guide lists every variable with its default and validation rule, explains which variables each provider requires, and describes how errors are reported and how credentials are kept out of logs.
 
-The variables share the `AUTH_MFA_` prefix with `z-auth-mfa`, but the two crates read disjoint sets. `MfaEnvLoader` ignores everything listed here, and `DeliveryConfig::from_env` ignores everything in the [z-auth-mfa configuration guide](../../mfa/docs/configuration.md) except `AUTH_MFA_TOTP_ISSUER`, which it consults as a fallback for the sender name.
+The variables share the `AUTH_MFA_` prefix with `z-auth-mfa`, but the two crates read disjoint sets. `MfaEnvLoader` ignores everything listed here, and `DeliveryConfig::from_env` ignores everything in the [z-auth-mfa configuration guide](../../docs/configuration.md) except `AUTH_MFA_TOTP_ISSUER`, which it consults as a fallback for the sender name.
 
 ## Loading
 
@@ -126,7 +126,7 @@ The loaders return z-auth's `ConfigError`, with the same two variants and the sa
 | Neither Twilio sender is set | `missing required configuration field: AUTH_MFA_TWILIO_FROM or AUTH_MFA_TWILIO_MESSAGING_SERVICE_SID (required by AUTH_MFA_SMS_PROVIDER=twilio)` |
 | Both Twilio senders are set | `failed to parse configuration field 'AUTH_MFA_TWILIO_FROM': set exactly one of it and AUTH_MFA_TWILIO_MESSAGING_SERVICE_SID` |
 | Unknown provider | `failed to parse configuration field 'AUTH_MFA_SMS_PROVIDER': expected log, twilio or webhook` |
-| Provider not compiled in | ``failed to parse configuration field 'AUTH_MFA_EMAIL_PROVIDER': z-auth-mfa-delivery was built without the `smtp` feature`` |
+| Provider not compiled in | ``failed to parse configuration field 'AUTH_MFA_EMAIL_PROVIDER': z-auth-mfa-sender was built without the `smtp` feature`` |
 | Invalid From address | `failed to parse configuration field 'AUTH_MFA_EMAIL_FROM': "no-reply@localhost" is not an email address` |
 | Unknown security mode | `failed to parse configuration field 'AUTH_MFA_SMTP_SECURITY': expected starttls, tls or none` |
 | Unknown Mailgun region | `failed to parse configuration field 'AUTH_MFA_MAILGUN_REGION': expected us or eu` |
@@ -146,7 +146,7 @@ The redaction is limited to those fields. The SMTP username, the Twilio account 
 
 ## The template
 
-The repository's `env.example` contains a commented section for this crate, headed `z-auth-mfa-delivery (optional)`, with every variable above and its default. A Postmark and Twilio deployment needs only a handful of them.
+The repository's `env.example` contains a commented section for this crate, headed `z-auth-mfa-sender (optional)`, with every variable above and its default. A Postmark and Twilio deployment needs only a handful of them.
 
 ```env
 AUTH_MFA_EMAIL_PROVIDER=postmark

@@ -10,7 +10,7 @@ use crate::router::failed;
 pub(crate) fn client(timeout: Duration) -> Result<reqwest::Client, AuthError> {
     reqwest::Client::builder()
         .timeout(timeout)
-        .user_agent(concat!("z-auth-mfa-delivery/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!("z-auth-mfa-sender/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|e| AuthError::Config(format!("HTTP client: {e}")))
 }

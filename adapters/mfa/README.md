@@ -10,7 +10,7 @@ Three families of second factor are supported, and the host chooses which of the
 
 Time-based one-time passwords follow RFC 6238 and work with any authenticator app. The crate generates a random shared secret, shows it to the user as an `otpauth://` URI for a QR code, and from then on verifies six to eight digit codes computed with HMAC-SHA-1, HMAC-SHA-256 or HMAC-SHA-512. The secret is sealed before it is stored, and every time step is accepted at most once, so a code observed over someone's shoulder cannot be replayed.
 
-Email and SMS codes are generated, hashed and checked by this crate, but delivering them is the host's job. The host implements the `CodeSender` trait with its mail or SMS provider, or takes a ready-made one from [z-auth-mfa-delivery](../mfa-delivery/README.md), which covers SMTP, SendGrid, Postmark, Mailgun, Twilio and a signed webhook, and hands it to `Mfa::with_code_sender`. This crate never talks to a provider itself and never stores a code in clear. Email and SMS destinations are sealed like TOTP secrets, and only a masked hint such as `j*******@example.com` is kept readable.
+Email and SMS codes are generated, hashed and checked by this crate, but delivering them is the host's job. The host implements the `CodeSender` trait with its mail or SMS provider, or takes a ready-made one from the subcrate [z-auth-mfa-sender](delivery/README.md) in this crate's `delivery` directory, which covers SMTP, SendGrid, Postmark, Mailgun, Twilio and a signed webhook, and hands it to `Mfa::with_code_sender`. This crate never talks to a provider itself and never stores a code in clear. Email and SMS destinations are sealed like TOTP secrets, and only a masked hint such as `j*******@example.com` is kept readable.
 
 Recovery codes are the fallback for a lost phone. A set of single-use codes is issued together with the user's first factor, shown once, and stored only as keyed hashes. A recovery code completes a login exactly like a TOTP code does, and a new set can be generated at any time with a fresh proof.
 
@@ -26,7 +26,7 @@ flowchart LR
     Builder -->|"assemble phase"| Svc["MfaServiceImpl"]
     Svc -->|"set_second_factor_gate"| Auth["AuthenticationService (core)"]
     Svc --> Repo["MfaRepository (e.g. PgMfaRepository)"]
-    Svc --> Sender["CodeSender (host or z-auth-mfa-delivery)"]
+    Svc --> Sender["CodeSender (host or z-auth-mfa-sender)"]
     Svc --> Sealer["SecretSealer (XChaChaSealer or custom)"]
     Svc --> Users["UserRepository (core)"]
     Svc --> Revocation["TokenRevocationService (core)"]
