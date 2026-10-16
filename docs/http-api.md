@@ -11,6 +11,9 @@ Each handler is a plain function, async except for the catalog, that takes a ser
 | `POST /register` | `register` | `auth.users()` | `RegisterRequest` | `UserResponse` |
 | `POST /login` | `login` | `auth.authentication()` | `LoginRequest`, `ClientContext` | `LoginResponse` |
 | `POST /login/second-factor` | `complete_login` | `auth.authentication()` | `CompleteLoginRequest`, `ClientContext` | `TokenPairResponse` |
+| `POST /login/link` | `confirm_link` | `auth.authentication()` | `ConfirmLinkRequest`, `ClientContext` | `LoginResponse` |
+| `GET /me/identities` | `external_identities` | `auth.authentication()`, `auth.account_links()` | bearer access token (`&str`) | `Vec<ExternalIdentityResponse>` |
+| `DELETE /me/identities/{id}` | `unlink_external_identity` | `auth.authentication()`, `auth.account_links()` | bearer access token (`&str`), identity id (`Uuid`) | `ExternalIdentityResponse`, the identity removed |
 | `POST /refresh` | `refresh` | `auth.authentication()` | `RefreshRequest`, `ClientContext` | `TokenPairResponse` |
 | `POST /logout` | `logout` | `auth.authentication()` | bearer access token (`&str`) | `bool`, whether a session was closed |
 | `POST /logout/all` | `logout_all` | `auth.authentication()` | bearer access token (`&str`) | `u64`, the number of sessions closed |
@@ -18,6 +21,8 @@ Each handler is a plain function, async except for the catalog, that takes a ser
 | `GET /permissions/catalog` | `permission_catalog` | `auth.permissions()` | none | `PermissionCatalogResponse` |
 
 A few handlers do more than forward. `logout` accepts an expired access token, as long as its signature is valid, and ends its session. `logout_all` first verifies the bearer token fully (signature, expiry and denylist) and then ends every session of the token's own user, so a revoked or expired token gets `401`. `refresh` is the only endpoint that touches session storage on the hot path. `revoke` converts each target and calls `revoke_many`, which skips targets that are not valid tokens and counts the sessions it ended. `permission_catalog` is synchronous and served from memory. It fails with `authz_mode_disabled` outside the permission modes.
+
+The three external-identity handlers need `ZAuthBuilder::external_identities` and fail with `config_error` without it. The sign-in through an identity provider itself has no handler in the core, because it depends on the protocol. z-auth-sso has handlers for the redirect and the callback, whose sign-in answers have the same shapes as the core's `ExternalLoginResponse` (plus a `linked` status for linking from a signed-in session), as its [guide](../adapters/sso/README.md) describes, and the [external identities guide](external-identities.md) covers the flow. `confirm_link` answers a `link_confirmation_required` sign-in with the existing account's password, links the identity and then logs in, so it returns tokens or a second-factor challenge like `login`. The challenge is single use, and a wrong password ends it. `external_identities` and `unlink_external_identity` verify the bearer token fully. Unlinking also needs a session opened at most `AUTH_EXTERNAL_LINK_MAX_AUTH_AGE_SECS` ago and fails with `reauthentication_required` otherwise, and it refuses to remove the user's last way to log in with `last_login_method`.
 
 ```mermaid
 flowchart LR
@@ -152,6 +157,35 @@ When a code was already sent, `delivery` holds a `ChallengeDeliveryDto` with the
 {"challenge_token": "Zp4rX0...", "method": "totp", "code": "123456"}
 ```
 
+A sign-in through an external identity provider is answered with an `ExternalLoginResponse`, which has the two `LoginResponse` variants and a third, `link_confirmation_required`. It is returned when a user with the provider's email exists, the identity is not linked to it yet and the provider's policy asks for that user's password. `email` is the existing account's email, to show the user.
+
+```json
+{
+  "status": "link_confirmation_required",
+  "challenge_token": "b3Jx9K...",
+  "expires_at": "2026-10-16T09:35:12Z",
+  "email": "alice@example.com"
+}
+```
+
+`POST /login/link` takes a `ConfirmLinkRequest` with that `challenge_token` and the account's `password`, and returns a `LoginResponse`.
+
+```json
+{"challenge_token": "b3Jx9K...", "password": "S3cur3P@ssw0rd!"}
+```
+
+`GET /me/identities` returns a list of `ExternalIdentityResponse`, oldest first, and `DELETE /me/identities/{id}` returns the one it removed. `provider` is the host's name for the provider configuration, `email` the address the provider reported when the identity was linked, and `last_login_at` is `null` until the identity is used to sign in. The provider's issuer and subject are not included.
+
+```json
+{
+  "id": "7c1e2d3f-4a5b-4c6d-8e9f-0a1b2c3d4e5f",
+  "provider": "google",
+  "email": "alice@example.com",
+  "linked_at": "2026-10-16T09:31:02.114Z",
+  "last_login_at": "2026-10-16T09:31:02.391Z"
+}
+```
+
 `POST /refresh` takes both tokens, the possibly expired access token and its refresh token, and returns a `TokenPairResponse`.
 
 ```json
@@ -198,7 +232,7 @@ Errors are reported with an `ErrorBody`, built from an `ApiError` with `body()`.
 
 ## Errors and status codes
 
-`ApiError` implements `From<AuthError>`, so a handler's `?` converts every domain error. It has three public fields, the `status` as a `u16`, the stable `code` as a `&'static str`, and a human-readable `message`. For client errors the message is the `AuthError`'s `Display` text. For 500 errors it is always the generic `internal server error`, so driver messages, hosts and configuration details never reach the client, and `code_delivery_failed` uses the fixed text `the code could not be delivered; retry later`. The table lists every mapping.
+`ApiError` implements `From<AuthError>`, so a handler's `?` converts every domain error. It has three public fields, the `status` as a `u16`, the stable `code` as a `&'static str`, and a human-readable `message`. For client errors the message is the `AuthError`'s `Display` text. For 500 errors it is always the generic `internal server error`, so driver messages, hosts and configuration details never reach the client, `code_delivery_failed` uses the fixed text `the code could not be delivered; retry later`, and `external_provider_unavailable` the fixed text `the identity provider could not be reached; retry later`, so the provider's response never reaches the client. The table lists every mapping.
 
 | `AuthError` | Status | Code |
 |---|---|---|
@@ -234,6 +268,15 @@ Errors are reported with an `ErrorBody`, built from an `ApiError` with `body()`.
 | `InvalidDestination` | 422 | `invalid_destination` |
 | `CodeResendTooSoon` | 429 | `code_resend_too_soon` |
 | `CodeDeliveryFailed` | 503 | `code_delivery_failed`, fixed message |
+| `ExternalLoginFailed` | 401 | `external_login_failed` |
+| `ExternalProviderUnavailable` | 503 | `external_provider_unavailable`, fixed message |
+| `UnknownProvider` | 404 | `unknown_provider` |
+| `ExternalIdentityNotLinked` | 403 | `external_identity_not_linked` |
+| `ExternalIdentityLinkedElsewhere` | 409 | `external_identity_linked_elsewhere` |
+| `ProviderAlreadyLinked` | 409 | `provider_already_linked` |
+| `ExternalIdentityNotFound` | 404 | `external_identity_not_found` |
+| `LastLoginMethod` | 409 | `last_login_method` |
+| `ReauthenticationRequired` | 401 | `reauthentication_required` |
 | `ClusterMessageRejected` | 401 | `cluster_message_rejected` |
 | `ClusterUnreachable` | 500 | `cluster_unreachable`, generic message |
 | `NotAuthority` | 421 | `not_authority` |
@@ -246,4 +289,4 @@ Errors are reported with an `ErrorBody`, built from an `ApiError` with `body()`.
 | `TokenCreationError` | 500 | `token_creation_error`, generic message |
 | `Internal` | 500 | `internal_error`, generic message |
 
-The 503 codes other than `code_delivery_failed` keep their descriptive messages, which contain no internal details, and signal a retryable condition. `replica_stale` and `replica_behind` come from z-auth-cluster's federation mode, `node_fenced` from an instance whose serving fence is up, and `not_authority` (421) tells the client that the operation belongs to the authority service in federation mode. Several codes are never produced by the core alone. The second-factor codes come from z-auth-mfa, the cluster codes from z-auth-cluster, and `account_not_verified`, `user_not_found`, `role_not_found`, `role_not_assigned` and `role_already_assigned` exist for hosts and adapters (the PostgreSQL adapter, for example, maps a violated active-assignment constraint to `role_already_assigned`). Log the original `AuthError` on the server before converting it if you need the details of a 500.
+The 503 codes other than `code_delivery_failed` and `external_provider_unavailable` keep their descriptive messages, which contain no internal details, and signal a retryable condition. `replica_stale` and `replica_behind` come from z-auth-cluster's federation mode, `node_fenced` from an instance whose serving fence is up, and `not_authority` (421) tells the client that the operation belongs to the authority service in federation mode. Several codes are never produced by the core alone. The second-factor codes come from z-auth-mfa (except `challenge_expired`, which the core also returns for a link challenge that has expired or was already used), the cluster codes from z-auth-cluster, `external_provider_unavailable` and `unknown_provider` from protocol adapters such as z-auth-sso, which also report a refused provider response as `external_login_failed`, and `account_not_verified`, `user_not_found`, `role_not_found`, `role_not_assigned` and `role_already_assigned` exist for hosts and adapters (the PostgreSQL adapter, for example, maps a violated active-assignment constraint to `role_already_assigned`). Log the original `AuthError` on the server before converting it if you need the details of a 500.

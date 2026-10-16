@@ -29,10 +29,25 @@
 //!   ([`SESSION_STORE_MIGRATOR`]).
 //! - `mfa` — z-auth-mfa's second-factor store ([`PgMfaRepository`]) and its
 //!   migration set ([`MFA_MIGRATOR`], [`run_mfa_migrations`]).
+//! - `external-identity` — linked external identities
+//!   ([`PgExternalIdentityRepository`]), flow states
+//!   ([`PgFlowStateRepository`]) and their migration set
+//!   ([`EXTERNAL_MIGRATOR`], [`run_external_migrations`]).
 //!
 //! The migration sets share `_sqlx_migrations` and never collide: core
-//! versions are below 1000, cluster versions 1001–1999, mfa versions from
-//! 2001.
+//! versions are below 1000, cluster versions 1001–1999, mfa versions
+//! 2001–2999, external-identity versions from 3001.
+//!
+//! ```rust,ignore
+//! // features = ["external-identity"]
+//! run_external_migrations(&pool).await?;  // core, then external tables
+//! let auth = ZAuth::builder(config, repositories(&pool))
+//!     .external_identities(
+//!         Arc::new(PgExternalIdentityRepository::new(pool.clone())),
+//!         Arc::new(PgFlowStateRepository::new(pool.clone())),
+//!     )
+//!     .build()?;
+//! ```
 //!
 //! ```rust,ignore
 //! // features = ["shared"]
@@ -50,6 +65,8 @@ pub mod config;
 pub mod constants;
 mod enums;
 mod errors;
+#[cfg(feature = "external-identity")]
+mod external;
 mod key_repository;
 #[cfg(feature = "mfa")]
 mod mfa;
@@ -68,6 +85,8 @@ pub use cluster::PgNodeRepository;
 #[cfg(feature = "federation")]
 pub use cluster::PgSyncStore;
 pub use config::PgConfig;
+#[cfg(feature = "external-identity")]
+pub use external::{PgExternalIdentityRepository, PgFlowStateRepository};
 pub use key_repository::PgKeyRepository;
 #[cfg(feature = "mfa")]
 pub use mfa::PgMfaRepository;
@@ -158,6 +177,25 @@ pub static MFA_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate::Migrator {
 pub async fn run_mfa_migrations(pool: &sqlx::PgPool) -> Result<(), sqlx::migrate::MigrateError> {
     MIGRATOR.run(pool).await?;
     MFA_MIGRATOR.run(pool).await
+}
+
+/// Linked external identities and flow states (`migrations_external/`,
+/// versions from 3001).  Applied on top of [`MIGRATOR`]; see
+/// [`run_external_migrations`].
+#[cfg(feature = "external-identity")]
+pub static EXTERNAL_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate::Migrator {
+    ignore_missing: true,
+    ..sqlx::migrate!("./migrations_external")
+};
+
+/// Apply every pending core migration, then every pending external-identity
+/// one.
+#[cfg(feature = "external-identity")]
+pub async fn run_external_migrations(
+    pool: &sqlx::PgPool,
+) -> Result<(), sqlx::migrate::MigrateError> {
+    MIGRATOR.run(pool).await?;
+    EXTERNAL_MIGRATOR.run(pool).await
 }
 
 /// Apply every pending core migration, then every pending cluster one.

@@ -138,6 +138,39 @@ pub enum AuthError {
     /// The host's code sender failed to deliver a one-time code.
     CodeDeliveryFailed(String),
 
+    // Raised by external sign-in and account linking (protocol adapters
+    // such as z-auth-sso raise the first three too).
+    /// The external identity provider's response was refused (bad state,
+    /// signature, nonce, audience, …) or reported an error.
+    ExternalLoginFailed(String),
+
+    /// The external identity provider could not be reached or answered
+    /// unexpectedly.  Retryable.
+    ExternalProviderUnavailable(String),
+
+    /// No identity provider is configured under this name.
+    UnknownProvider(String),
+
+    /// The external identity is not linked to a user, and the provider's
+    /// policy neither links nor creates one.
+    ExternalIdentityNotLinked,
+
+    /// The external identity is already linked to another user.
+    ExternalIdentityLinkedElsewhere,
+
+    /// The user already has as many identities of this provider as its
+    /// policy allows.
+    ProviderAlreadyLinked,
+
+    /// No such external identity among the user's.
+    ExternalIdentityNotFound,
+
+    /// Removing this identity would leave the user no way to log in.
+    LastLoginMethod,
+
+    /// The session is too old for this operation; log in again first.
+    ReauthenticationRequired,
+
     /// Federation mode: this operation belongs to the authority service
     /// (UMS).  `addresses` lists authority instances known to this one.
     NotAuthority {
@@ -231,6 +264,27 @@ impl std::fmt::Display for AuthError {
             Self::InvalidDestination(reason) => write!(f, "invalid destination: {reason}"),
             Self::CodeResendTooSoon => write!(f, "a code was sent too recently; retry later"),
             Self::CodeDeliveryFailed(reason) => write!(f, "code delivery failed: {reason}"),
+            Self::ExternalLoginFailed(reason) => write!(f, "external sign-in failed: {reason}"),
+            Self::ExternalProviderUnavailable(reason) => {
+                write!(f, "identity provider unavailable: {reason}")
+            }
+            Self::UnknownProvider(name) => write!(f, "unknown identity provider '{name}'"),
+            Self::ExternalIdentityNotLinked => {
+                write!(f, "this external account is not linked to a user")
+            }
+            Self::ExternalIdentityLinkedElsewhere => {
+                write!(f, "this external account is linked to another user")
+            }
+            Self::ProviderAlreadyLinked => {
+                write!(f, "an account of this provider is already linked")
+            }
+            Self::ExternalIdentityNotFound => write!(f, "external identity not found"),
+            Self::LastLoginMethod => {
+                write!(f, "the last way to log in cannot be removed")
+            }
+            Self::ReauthenticationRequired => {
+                write!(f, "log in again to perform this operation")
+            }
             Self::NotAuthority { service, .. } => {
                 write!(f, "this operation is handled by the '{service}' service")
             }

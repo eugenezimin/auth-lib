@@ -88,16 +88,17 @@ A `RefreshGate` is consulted on every refresh. Its `check_fresh()` runs after th
 
 ### The second-factor gate
 
-A `SecondFactorGate` is consulted on every login once the password matched and the account is active, before any session exists. Its `on_password_verified(&UserWithRoles, &ClientContext)` returns a `SecondFactorDecision`, either `Proceed` (open the session now) or `Challenge(LoginChallenge)` (ask the client for a second factor and open nothing), and may also refuse the login outright with an error such as `SecondFactorLocked`. The `LoginChallenge` carries an opaque single-use `challenge_token`, its `expires_at`, the `methods` the user may answer with (for example `totp`, `email`, `sms`, `recovery_code`, preferred first) and an optional `ChallengeDelivery` describing where a code was already sent, with a masked `destination_hint`.
+A `SecondFactorGate` is consulted on every login once the first factor succeeded and the account is active, before any session exists. The first factor is the password, or an external identity provider after `login_external` or `confirm_link`, in which case the gate is skipped when the provider reported `mfa`. Its `on_password_verified(&UserWithRoles, &ClientContext)` returns a `SecondFactorDecision`, either `Proceed` (open the session now) or `Challenge(LoginChallenge)` (ask the client for a second factor and open nothing), and may also refuse the login outright with an error such as `SecondFactorLocked`. The `LoginChallenge` carries an opaque single-use `challenge_token`, its `expires_at`, the `methods` the user may answer with (for example `totp`, `email`, `sms`, `recovery_code`, preferred first) and an optional `ChallengeDelivery` describing where a code was already sent, with a masked `destination_hint`.
 
-The client answers with a `SecondFactorProof` (the challenge token, an optional method and the code) through `complete_login`. The gate's `verify(&SecondFactorProof, &ClientContext)` checks it, consumes the challenge on success and returns a `VerifiedSecondFactor` with the `user_id` the challenge was issued to and the `amr` methods the proof adds. z-auth then re-reads the account and opens the session with the gate's methods plus `pwd` and `mfa`, sorted. The RFC 8176 method names are available as constants in `z_auth::conf::constants`.
+The client answers with a `SecondFactorProof` (the challenge token, an optional method and the code) through `complete_login`. The gate's `verify(&SecondFactorProof, &ClientContext)` checks it, consumes the challenge on success and returns a `VerifiedSecondFactor` with the `user_id` the challenge was issued to and the `amr` methods the proof adds. z-auth then re-reads the account and opens the session with the gate's methods plus the first factor's and `mfa`, sorted. The first factor's methods are `pwd` after a password login, and after an external sign-in they are the ones z-auth kept in the flow-state store when the challenge was issued, such as `fed` (with `pwd` after `confirm_link`). The RFC 8176 method names are available as constants in `z_auth::conf::constants`.
 
 | Constant | Value | Meaning |
 |---|---|---|
-| `AMR_PWD` | `pwd` | Password, added by z-auth to every session |
+| `AMR_PWD` | `pwd` | Password, added by z-auth after a password login and after `confirm_link` |
 | `AMR_OTP` | `otp` | One-time password, such as TOTP, an emailed code or a recovery code |
 | `AMR_SMS` | `sms` | A code sent by SMS |
 | `AMR_MFA` | `mfa` | More than one factor was used, added by z-auth after a second factor |
+| `AMR_FED` | `fed` | Signed in through an external identity provider, added by z-auth after `login_external`. Not an RFC 8176 value |
 
 ### The serving fence
 

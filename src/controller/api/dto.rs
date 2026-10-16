@@ -108,6 +108,56 @@ pub struct CompleteLoginRequest {
     pub code: String,
 }
 
+// ── External identities ───────────────────────────────────────────────────────
+
+/// Response of a sign-in through an external identity provider.
+///
+/// JSON (feature `serde`): `{"status": "authenticated", …}`,
+/// `{"status": "second_factor_required", …}` or
+/// `{"status": "link_confirmation_required", "challenge_token": …,
+/// "email": …}`.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(tag = "status", rename_all = "snake_case"))]
+pub enum ExternalLoginResponse {
+    Authenticated(TokenPairResponse),
+    SecondFactorRequired(LoginChallengeResponse),
+    LinkConfirmationRequired(LinkChallengeResponse),
+}
+
+/// A sign-in waiting for the password of the existing account with the
+/// provider's email: send `challenge_token` and the password to
+/// `POST /login/link`.
+#[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct LinkChallengeResponse {
+    pub challenge_token: String,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+    /// The existing account's email.
+    pub email: String,
+}
+
+/// Body of `POST /login/link`.
+#[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct ConfirmLinkRequest {
+    pub challenge_token: String,
+    pub password: String,
+}
+
+/// An external identity linked to the user.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct ExternalIdentityResponse {
+    pub id: uuid::Uuid,
+    /// The provider's name in the host's configuration (`google`, …).
+    pub provider: String,
+    /// The email the provider reported when the identity was linked.
+    pub email: Option<String>,
+    pub linked_at: chrono::DateTime<chrono::Utc>,
+    pub last_login_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
 // ── Token revocation ──────────────────────────────────────────────────────────
 
 /// Something to revoke.  Revoking a token ends its whole session.
@@ -228,6 +278,25 @@ impl std::fmt::Debug for TokenPairResponse {
             .field("access_expires_at", &self.access_expires_at)
             .field("refresh_token", &REDACTED)
             .field("refresh_expires_at", &self.refresh_expires_at)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for LinkChallengeResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LinkChallengeResponse")
+            .field("challenge_token", &REDACTED)
+            .field("expires_at", &self.expires_at)
+            .field("email", &self.email)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for ConfirmLinkRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConfirmLinkRequest")
+            .field("challenge_token", &REDACTED)
+            .field("password", &REDACTED)
             .finish()
     }
 }

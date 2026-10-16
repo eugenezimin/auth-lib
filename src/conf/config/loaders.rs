@@ -39,8 +39,8 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 
 use crate::conf::config::loader::ConfigLoader;
 use crate::conf::config::model::{
-    AuthConfig, AuthzConfig, AuthzMode, ConfigError, JwtConfig, PasswordPolicy, RawConfig,
-    RetryMatch, SessionConfig,
+    AuthConfig, AuthzConfig, AuthzMode, ConfigError, ExternalConfig, JwtConfig, PasswordPolicy,
+    RawConfig, RetryMatch, SessionConfig,
 };
 use crate::conf::config::source::{ConfigSource, Section};
 use crate::conf::constants::*;
@@ -119,6 +119,8 @@ impl ConfigLoader for SourceLoader {
             password_require_digit: parse_opt(&s, ENV_PASSWORD_REQUIRE_DIGIT)?,
             authz_mode: str_opt(&s, ENV_AUTHZ_MODE),
             refresh_retry_match: str_opt(&s, ENV_REFRESH_RETRY_MATCH),
+            external_link_max_auth_age_secs: parse_opt(&s, ENV_EXTERNAL_LINK_MAX_AUTH_AGE_SECS)?,
+            external_link_challenge_ttl_secs: parse_opt(&s, ENV_EXTERNAL_LINK_CHALLENGE_TTL_SECS)?,
         })
     }
 }
@@ -241,6 +243,14 @@ impl RawConfig {
         self.refresh_retry_match = Some(v.into());
         self
     }
+    pub fn external_link_max_auth_age_secs(mut self, v: u64) -> Self {
+        self.external_link_max_auth_age_secs = Some(v);
+        self
+    }
+    pub fn external_link_challenge_ttl_secs(mut self, v: u64) -> Self {
+        self.external_link_challenge_ttl_secs = Some(v);
+        self
+    }
 
     /// Validate and convert into a typed [`AuthConfig`].
     ///
@@ -339,11 +349,23 @@ impl RawConfig {
                 .parse()?,
         };
 
+        let external = ExternalConfig {
+            link_max_auth_age: secs(
+                self.external_link_max_auth_age_secs,
+                DEFAULT_EXTERNAL_LINK_MAX_AUTH_AGE_SECS,
+            ),
+            link_challenge_ttl: secs(
+                self.external_link_challenge_ttl_secs,
+                DEFAULT_EXTERNAL_LINK_CHALLENGE_TTL_SECS,
+            ),
+        };
+
         Ok(AuthConfig {
             jwt,
             session,
             password,
             authz,
+            external,
         })
     }
 }
@@ -476,6 +498,14 @@ impl std::fmt::Debug for RawConfig {
             .field("max_sessions_per_user", &self.max_sessions_per_user)
             .field("authz_mode", &self.authz_mode)
             .field("refresh_retry_match", &self.refresh_retry_match)
+            .field(
+                "external_link_max_auth_age_secs",
+                &self.external_link_max_auth_age_secs,
+            )
+            .field(
+                "external_link_challenge_ttl_secs",
+                &self.external_link_challenge_ttl_secs,
+            )
             .finish()
     }
 }

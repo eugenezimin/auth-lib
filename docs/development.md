@@ -4,12 +4,12 @@ This guide is for working on z-auth itself. It describes the workspace layout, t
 
 ## Workspace layout
 
-The repository is a Cargo workspace whose root package is the core crate. The members are the four adapter crates and the testkit. The workspace has no committed `Cargo.lock`, because it is a library workspace, so CI resolves one where it needs it.
+The repository is a Cargo workspace whose root package is the core crate. The members are the five adapter crates and the testkit. The workspace has no committed `Cargo.lock`, because it is a library workspace, so CI resolves one where it needs it.
 
 ```text
 z-auth/
 ├── Cargo.toml                    core package z-auth and the workspace definition
-├── env.example                   every variable read by the core, cluster, mfa, mfa-sender and postgres crates
+├── env.example                   every variable read by the core, cluster, mfa, mfa-sender, sso and postgres crates
 ├── examples/
 │   └── keygen.rs                 prints AUTH_JWT_SIGNING_KEY, AUTH_REFRESH_SECRET, AUTH_JWT_VERIFYING_KEYS
 ├── src/                          the core crate (see architecture.md)
@@ -22,6 +22,7 @@ z-auth/
 │   ├── revocation.rs             pending, enforced, bootstrap at start, expiry
 │   ├── roles.rs                  role management
 │   ├── second_factor.rs          two-step login through a stub SecondFactorGate
+│   ├── external_identity.rs      external sign-in, linking policies, explicit linking, amr
 │   ├── session_flow.rs           login, refresh, grace, reuse, IP binding, eviction, logout, account changes
 │   └── user_role.rs              assignments and their history
 ├── testkit/                      z-auth-testkit, in-memory adapters and helpers (publish = false)
@@ -29,7 +30,8 @@ z-auth/
 │   ├── cluster/                  z-auth-cluster, shared and federation mode
 │   ├── mfa/                      z-auth-mfa, two-factor authentication, examples/mfa_keygen.rs
 │   │   └── delivery/             z-auth-mfa-sender, the subcrate with email and SMS CodeSender implementations
-│   └── postgres/                 z-auth-postgres, sqlx repositories, migrations, setup_db
+│   ├── postgres/                 z-auth-postgres, sqlx repositories, migrations, setup_db
+│   └── sso/                      z-auth-sso, sign-in through OIDC and OAuth2 identity providers
 ├── .cargo/audit.toml             cargo-audit configuration
 └── .github/workflows/
     ├── ci.yml                    pull-request checks
@@ -75,7 +77,7 @@ The PostgreSQL adapter's tests talk to a real database. Their helper reads the c
 
 ```sh
 export DB_HOST=localhost DB_PORT=5432 DB_USER=postgres DB_PASSWORD=postgres DB_NAME=auth
-cargo run -p z-auth-postgres --features shared,mfa --bin setup_db -- --cluster --mfa
+cargo run -p z-auth-postgres --features shared,mfa,external-identity --bin setup_db -- --cluster --mfa --external
 cargo test -p z-auth-postgres --all-features
 ```
 
@@ -83,7 +85,7 @@ The helpers are idempotent and safe to run in any order with several test thread
 
 ## Feature combinations
 
-Each crate has optional features (the core has `argon2`, `crypto` and `serde`, z-auth-cluster `shared` and `federation`, z-auth-mfa `aead`, z-auth-mfa-sender `smtp`, `sendgrid`, `postmark`, `mailgun`, `twilio` and `webhook`, z-auth-postgres `shared`, `federation` and `mfa`), and every combination must compile. CI checks this with cargo-hack, which builds every crate with each feature on its own as well as with no default features, without dev-dependencies. Run the same check locally before changing feature gates.
+Each crate has optional features (the core has `argon2`, `crypto` and `serde`, z-auth-cluster `shared` and `federation`, z-auth-mfa `aead`, z-auth-mfa-sender `smtp`, `sendgrid`, `postmark`, `mailgun`, `twilio` and `webhook`, z-auth-postgres `shared`, `federation`, `mfa` and `external-identity`, z-auth-sso `oidc` and `github`), and every combination must compile. CI checks this with cargo-hack, which builds every crate with each feature on its own as well as with no default features, without dev-dependencies. Run the same check locally before changing feature gates.
 
 ```sh
 cargo install cargo-hack
@@ -112,7 +114,7 @@ flowchart LR
     audit --> summary
 ```
 
-The format job runs `cargo fmt --all --check`. The clippy job runs `cargo clippy --workspace --all-targets --all-features -- -D warnings`. The test job runs the database-free suites with the command shown above. The PostgreSQL job starts a `postgres:16` service, runs `setup_db` with the `shared` and `mfa` features and the `--cluster --mfa` flags, and then runs `cargo test -p z-auth-postgres --all-features`. The features job runs the cargo-hack check. The docs job builds `cargo doc --workspace --all-features --no-deps` with rustdoc warnings denied, so broken intra-doc links fail the build. The audit job generates a lockfile and runs `cargo audit`, honouring the ignore list in `.cargo/audit.toml`, which currently ignores one advisory for the `rsa` crate that is only reachable through an sqlx MySQL dependency the workspace never enables. The summary job writes a table of the results into the run summary and fails if any job failed or was cancelled.
+The format job runs `cargo fmt --all --check`. The clippy job runs `cargo clippy --workspace --all-targets --all-features -- -D warnings`. The test job runs the database-free suites with the command shown above. The PostgreSQL job starts a `postgres:16` service, runs `setup_db` with the `shared`, `mfa` and `external-identity` features and the `--cluster --mfa --external` flags, and then runs `cargo test -p z-auth-postgres --all-features`. The features job runs the cargo-hack check. The docs job builds `cargo doc --workspace --all-features --no-deps` with rustdoc warnings denied, so broken intra-doc links fail the build. The audit job generates a lockfile and runs `cargo audit`, honouring the ignore list in `.cargo/audit.toml`, which currently ignores one advisory for the `rsa` crate, a timing side channel in private-key operations, reachable through an sqlx MySQL dependency the workspace never enables and through z-auth-sso's `jsonwebtoken`, which only verifies signatures with public keys. The summary job writes a table of the results into the run summary and fails if any job failed or was cancelled.
 
 ## Releases
 

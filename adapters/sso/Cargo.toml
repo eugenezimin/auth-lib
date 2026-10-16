@@ -1,0 +1,36 @@
+[package]
+name = "z-auth-sso"
+version = "0.3.0"
+edition = "2024"
+description = "Single sign-on for z-auth: OpenID Connect and OAuth2 identity providers (Google, LinkedIn, Okta, Entra ID, GitHub, …)"
+
+[features]
+default = ["oidc"]
+# OpenID Connect providers (`kind: oidc`): discovery, ID tokens verified
+# against the provider's JWKS.  Generic OAuth2 providers (`kind: oauth2`)
+# need no feature.
+oidc = ["dep:jsonwebtoken"]
+# The GitHub preset (`kind: github`).
+github = []
+
+[dependencies]
+z-auth       = { path = "../..", default-features = false, features = ["crypto", "serde"] }
+async-trait  = "0.1.89"
+base64       = "0.23"
+chrono       = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
+getrandom    = "0.4"
+serde        = { version = "1", features = ["derive"] }
+serde_json   = "1"
+sha2         = "0.11"
+uuid         = { version = "1", features = ["v4", "serde"] }
+# rustls with the platform's certificate store.
+reqwest      = { version = "0.13", default-features = false, features = ["rustls", "json", "form"] }
+jsonwebtoken = { version = "11", optional = true, default-features = false, features = ["rust_crypto"] }
+
+[dev-dependencies]
+z-auth         = { path = "../..", features = ["argon2", "crypto", "serde", "yaml"] }
+z-auth-testkit = { path = "../../testkit" }
+tokio          = { version = "1", features = ["macros", "rt-multi-thread"] }
+wiremock       = "0.6"
+# Signs the test ID tokens.
+jsonwebtoken   = { version = "11", default-features = false, features = ["rust_crypto", "use_pem"] }

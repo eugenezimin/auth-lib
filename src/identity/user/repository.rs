@@ -68,7 +68,7 @@ pub trait UserRepository: Send + Sync {
 
     /// Insert a new user and return the fully hydrated [`User`].
     ///
-    /// New users are active and unverified.
+    /// New users are active; `is_verified` is taken from `new_user`.
     async fn create(&self, new_user: NewUser) -> Result<User, AuthError>;
 
     /// Apply a partial update; `None` fields are left unchanged.

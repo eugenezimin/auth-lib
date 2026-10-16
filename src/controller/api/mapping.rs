@@ -1,13 +1,16 @@
 //! Conversions between API DTOs and domain models.
 
 use crate::controller::api::dto::{
-    ChallengeDeliveryDto, CompleteLoginRequest, LoginChallengeResponse, LoginRequest,
+    ChallengeDeliveryDto, CompleteLoginRequest, ConfirmLinkRequest, ExternalIdentityResponse,
+    ExternalLoginResponse, LinkChallengeResponse, LoginChallengeResponse, LoginRequest,
     LoginResponse, PermissionCatalogResponse, PermissionDto, PermissionOptionDto, RegisterRequest,
     RevokeTargetDto, TokenPairResponse, UserResponse,
 };
+use crate::identity::external::ExternalIdentity;
 use crate::identity::user::model::{RegisterUser, User};
 use crate::security::authentication::model::{
-    ChallengeDelivery, Credentials, LoginChallenge, LoginOutcome, SecondFactorProof, TokenPair,
+    ChallengeDelivery, Credentials, ExternalLoginOutcome, LinkChallenge, LinkConfirmation,
+    LoginChallenge, LoginOutcome, SecondFactorProof, TokenPair,
 };
 use crate::security::authorization::model::{Permission, PermissionCatalog, PermissionKind};
 use crate::security::token::model::RevokeTarget;
@@ -66,6 +69,51 @@ impl From<LoginOutcome> for LoginResponse {
         match o {
             LoginOutcome::Tokens(pair) => Self::Authenticated(pair.into()),
             LoginOutcome::SecondFactor(challenge) => Self::SecondFactorRequired(challenge.into()),
+        }
+    }
+}
+
+impl From<ExternalLoginOutcome> for ExternalLoginResponse {
+    fn from(o: ExternalLoginOutcome) -> Self {
+        match o {
+            ExternalLoginOutcome::Tokens(pair) => Self::Authenticated(pair.into()),
+            ExternalLoginOutcome::SecondFactor(challenge) => {
+                Self::SecondFactorRequired(challenge.into())
+            }
+            ExternalLoginOutcome::LinkConfirmation(challenge) => {
+                Self::LinkConfirmationRequired(challenge.into())
+            }
+        }
+    }
+}
+
+impl From<LinkChallenge> for LinkChallengeResponse {
+    fn from(c: LinkChallenge) -> Self {
+        Self {
+            challenge_token: c.challenge_token,
+            expires_at: c.expires_at,
+            email: c.email,
+        }
+    }
+}
+
+impl From<ConfirmLinkRequest> for LinkConfirmation {
+    fn from(r: ConfirmLinkRequest) -> Self {
+        Self {
+            challenge_token: r.challenge_token,
+            password: r.password,
+        }
+    }
+}
+
+impl From<ExternalIdentity> for ExternalIdentityResponse {
+    fn from(i: ExternalIdentity) -> Self {
+        Self {
+            id: i.id,
+            provider: i.provider,
+            email: i.email,
+            linked_at: i.created_at,
+            last_login_at: i.last_login_at,
         }
     }
 }

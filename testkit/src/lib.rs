@@ -96,6 +96,20 @@ pub fn server(config: AuthConfig) -> Server {
     server_with(Arc::new(InMemoryDb::new(clock.clone())), clock, config)
 }
 
+/// Like [`server`], with external sign-in and account linking enabled
+/// (identities and flow states in the same store).
+pub fn external_server(config: AuthConfig) -> Server {
+    let clock = MockClock::new();
+    let db = Arc::new(InMemoryDb::new(clock.clone()));
+    let auth = ZAuth::builder(config, repositories(&db))
+        .permissions(db.clone())
+        .external_identities(db.clone(), db.clone())
+        .clock(clock.clone())
+        .build()
+        .expect("ZAuth must build with all adapters supplied");
+    Server { auth, db, clock }
+}
+
 /// A fully wired [`ZAuth`] backed by a fresh in-memory store.
 pub fn make_auth() -> ZAuth {
     server(test_config()).auth

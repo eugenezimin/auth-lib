@@ -15,4 +15,4 @@ pub use repository::UserRepository;
 pub use service::UserService;
 pub use service_impl::UserServiceImpl;
 pub use sessions::{AccountChange, AccountSessions};
-pub use validation::normalize_email;
+pub use validation::{normalize_email, validate_email};

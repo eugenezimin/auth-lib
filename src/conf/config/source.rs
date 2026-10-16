@@ -187,37 +187,87 @@ impl ConfigSource {
         keys: &'a [Key],
         skip: &[&str],
     ) -> Result<Section<'a>, ConfigError> {
-        if let Some(doc) = &self.file {
-            let under = |path: &str, prefix: &str| {
-                path.strip_prefix(prefix)
-                    .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
-            };
-            for path in doc.leaves.keys().chain(&doc.unset).chain(&doc.containers) {
-                if !under(path, name) || skip.iter().any(|s| under(path, s)) {
-                    continue;
-                }
-                if path == name {
-                    // A mapping, or `~` for an empty section.
-                    if doc.leaves.contains_key(path) {
-                        return Err(ConfigError::Parse {
-                            key: doc.origin(path),
-                            reason: "expected a mapping of settings".into(),
-                        });
-                    }
-                    continue;
-                }
-                let known = keys.iter().any(|k| k.path == path)
-                    || (doc.containers.contains(path) && keys.iter().any(|k| under(k.path, path)));
-                if !known {
-                    return Err(ConfigError::Parse {
-                        key: doc.origin(path),
-                        reason: format!("unknown setting in the `{name}` section"),
-                    });
-                }
-            }
-        }
+        self.check_under(name, skip, |path, container| {
+            keys.iter()
+                .any(|k| k.path == path || (container && under(k.path, path)))
+        })?;
         Ok(Section { source: self, keys })
     }
+
+    /// The names directly under `path` in the file, sorted — e.g. the
+    /// providers configured under `sso.providers`.  Empty without a file
+    /// layer.
+    pub fn children(&self, path: &str) -> Vec<String> {
+        let Some(doc) = &self.file else {
+            return Vec::new();
+        };
+        let prefix = format!("{path}.");
+        let names: std::collections::BTreeSet<String> = doc
+            .leaves
+            .keys()
+            .chain(&doc.unset)
+            .chain(&doc.containers)
+            .filter_map(|p| p.strip_prefix(&prefix))
+            .map(|rest| rest.split('.').next().unwrap_or(rest).to_string())
+            .collect();
+        names.into_iter().collect()
+    }
+
+    /// [`section`](Self::section)'s check for settings named at run time:
+    /// fails when the file has a key under `name` whose path relative to
+    /// `name` is not one of `allowed` (e.g. `client_id`, `claims.email`).
+    pub fn check_keys(&self, name: &str, allowed: &[&str]) -> Result<(), ConfigError> {
+        let prefix = format!("{name}.");
+        self.check_under(name, &[], |path, container| {
+            let Some(rel) = path.strip_prefix(&prefix) else {
+                return false;
+            };
+            allowed
+                .iter()
+                .any(|a| *a == rel || (container && under(a, rel)))
+        })
+    }
+
+    /// Every file key under `name` (outside `skip`) must be `known`
+    /// (`known(path, is_mapping)`); `name` itself must be a mapping.
+    fn check_under(
+        &self,
+        name: &str,
+        skip: &[&str],
+        known: impl Fn(&str, bool) -> bool,
+    ) -> Result<(), ConfigError> {
+        let Some(doc) = &self.file else {
+            return Ok(());
+        };
+        for path in doc.leaves.keys().chain(&doc.unset).chain(&doc.containers) {
+            if !under(path, name) || skip.iter().any(|s| under(path, s)) {
+                continue;
+            }
+            if path == name {
+                // A mapping, or `~` for an empty section.
+                if doc.leaves.contains_key(path) {
+                    return Err(ConfigError::Parse {
+                        key: doc.origin(path),
+                        reason: "expected a mapping of settings".into(),
+                    });
+                }
+                continue;
+            }
+            if !known(path, doc.containers.contains(path)) {
+                return Err(ConfigError::Parse {
+                    key: doc.origin(path),
+                    reason: format!("unknown setting in the `{name}` section"),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+/// `path` is `prefix` or lies below it.
+fn under(path: &str, prefix: &str) -> bool {
+    path.strip_prefix(prefix)
+        .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
 }
 
 impl std::fmt::Debug for ConfigSource {

@@ -1,24 +1,24 @@
 # Schema reference
 
-This page documents the database schema that the migration sets of `z-auth-postgres` build, as it stands after `migrations/0002_session_amr.sql`, `migrations_cluster/1001_cluster_schema.sql` and `migrations_mfa/2001_mfa_schema.sql`. Every column, type, constraint and index listed here was checked against those files. The session-store schema used by non-authority services in federation mode is a subset of the same definitions and is described in [federation storage](federation.md); how the files are applied is the subject of [migrations](migrations.md).
+This page documents the database schema that the migration sets of `z-auth-postgres` build, as it stands after `migrations/0002_session_amr.sql`, `migrations_cluster/1001_cluster_schema.sql`, `migrations_mfa/2001_mfa_schema.sql` and `migrations_external/3001_external_identity_schema.sql`. Every column, type, constraint and index listed here was checked against those files. The session-store schema used by non-authority services in federation mode is a subset of the same definitions and is described in [federation storage](federation.md); how the files are applied is the subject of [migrations](migrations.md).
 
 ## Naming conventions
 
-Every table name starts with the layer that owns it. The core set creates `identity_` tables for users, roles and role assignments, and `security_` tables for the permission catalog, grants, sessions, revocations and verifying keys. The optional sets add `cluster_` tables for z-auth-cluster (the instance registry and the federation change feed) and `mfa_` tables for z-auth-mfa (second factors, recovery codes, login challenges and lockout state). A database administrator can therefore tell from the name alone which crate a table belongs to and which migration set created it.
+Every table name starts with the layer that owns it. The core set creates `identity_` tables for users, roles and role assignments, and `security_` tables for the permission catalog, grants, sessions, revocations and verifying keys. The optional sets add `cluster_` tables for z-auth-cluster (the instance registry and the federation change feed) and `mfa_` tables for z-auth-mfa (second factors, recovery codes, login challenges and lockout state). The external-identity set adds one table to each core layer, `identity_external_identities` for linked identities and `security_flow_states` for pending sign-ins, because both belong to the core's own ports. A database administrator can therefore tell from the name alone which crate a table belongs to and which migration set created it.
 
-Constraints, indexes, sequences and triggers embed the name of the table they belong to. Check constraints are named `chk_<table>_<rule>`, foreign keys `fk_<table>_<column>`, plain indexes `idx_<table>_<purpose>`, unique indexes on the core tables `<table>_<column>_key`, unique indexes on the mfa tables `uq_<table>_<columns>`, sequences `<table>_<column>_seq` and triggers `trg_feed_<table>`. Two names predate the convention and were kept because code depends on them, namely the unique index `identity_users_email` (without the `_key` suffix) and the partial unique index `unique_user_role_active`. Constraint names matter beyond readability, because the adapter maps some of them to domain errors (see [the last section](#constraint-names-and-domain-errors)).
+Constraints, indexes, sequences and triggers embed the name of the table they belong to. Check constraints are named `chk_<table>_<rule>`, foreign keys `fk_<table>_<column>`, plain indexes `idx_<table>_<purpose>`, unique indexes on the core tables `<table>_<column>_key`, unique indexes on the mfa and external-identity tables `uq_<table>_<columns>`, sequences `<table>_<column>_seq` and triggers `trg_feed_<table>`. Two names predate the convention and were kept because code depends on them, namely the unique index `identity_users_email` (without the `_key` suffix) and the partial unique index `unique_user_role_active`. Constraint names matter beyond readability, because the adapter maps some of them to domain errors (see [the last section](#constraint-names-and-domain-errors)).
 
 Column names are plain snake case. Event columns are named after the event (`assigned_at`, `issued_at`, `revoked_at`, `superseded_at`, `ended_at`, `enforced_at`, `confirmed_at`, `consumed_at`), and expiry columns end in `_expires_at` or `expires_at`.
 
 ## Keys
 
-Most tables have a surrogate primary key `id uuid` with the default `gen_random_uuid()`, so the database assigns identifiers and the adapter reads them back with `RETURNING`. A few tables use a natural key instead, because the domain already has a stable identifier. `security_session_fork_aliases` is keyed by the access token's `jti`, `cluster_account_snapshots` and `mfa_user_state` by `user_id`, `cluster_sync_freshness` by `service`, `cluster_feed_cursors` by `site_id`, and `cluster_change_feed` by the pair `(kind, key)`. The singleton tables `cluster_catalog_snapshot` and `cluster_sync_site` use a boolean `singleton` column that a check constraint pins to `true`, which allows at most one row.
+Most tables have a surrogate primary key `id uuid` with the default `gen_random_uuid()`, so the database assigns identifiers and the adapter reads them back with `RETURNING`. A few tables use a natural key instead, because the domain already has a stable identifier. `security_session_fork_aliases` is keyed by the access token's `jti`, `cluster_account_snapshots` and `mfa_user_state` by `user_id`, `cluster_sync_freshness` by `service`, `cluster_feed_cursors` by `site_id`, and `cluster_change_feed` by the pair `(kind, key)`, and `security_flow_states` by its `key` string. The singleton tables `cluster_catalog_snapshot` and `cluster_sync_site` use a boolean `singleton` column that a check constraint pins to `true`, which allows at most one row.
 
 Three tables have a uuid key without a default, because the caller chooses it. `cluster_nodes.id` is the node id generated per process start by z-auth-cluster, and `mfa_factors.id` and `mfa_challenges.id` are chosen by z-auth-mfa so that sealed secrets can be bound to the factor id before the row exists. In `security_session_generations`, the surrogate `id` doubles as the `jti` of the access token issued with that generation.
 
 ## Timestamps and the database clock
 
-Every table has `created_at timestamptz NOT NULL DEFAULT now()`, recording when the row was inserted. Business events have their own columns next to it, even where the two are equal today; `identity_role_assignments.assigned_at` and `created_at` are both stamped at insert, but they mean different things and are kept independent by design.
+Every table except `security_flow_states` has `created_at timestamptz NOT NULL DEFAULT now()`, recording when the row was inserted. Business events have their own columns next to it, even where the two are equal today; `identity_role_assignments.assigned_at` and `created_at` are both stamped at insert, but they mean different things and are kept independent by design.
 
 Only rows that are edited in place carry `updated_at`. In the core set that is `identity_users` alone, and every `UPDATE` query sets `updated_at = now()` explicitly, so there is no trigger overhead. In the cluster set the account and catalog snapshots and the feed cursors carry it, and the upserts that replace them set it. Every other change has a dedicated column (`revoked_at`, `superseded_at`, `ended_at`, `idle_expires_at`, `heartbeat_changed_at` and so on), which records what changed rather than merely that something did. `identity_roles` has no `updated_at` even though name and description can be changed through `RoleRepository::update`; the comment in the migration that calls roles immutable is out of date.
 
@@ -39,6 +39,7 @@ The identity layer holds accounts and role-based access control. `identity_users
 | `identity_users` | `id` | Accounts with email, optional password hash and username, profile fields, and the `is_active` and `is_verified` flags |
 | `identity_roles` | `id` | Roles with a unique display `name` and a unique, immutable `code` that access tokens carry in the `rol` claim |
 | `identity_role_assignments` | `id` | Which user holds which role, with `assigned_at` and `revoked_at` (NULL while active) |
+| `identity_external_identities` | `id` | External-identity set only. Identities of other providers linked to a user, unique by `(issuer, subject)`, with the host's `provider` name, the `email` the provider reported at linking, `created_at` (when linked) and `last_login_at` |
 
 ### Security tables
 
@@ -57,10 +58,13 @@ Permissions are encoded into access tokens by position. Every `bool` and `text` 
 | `security_session_fork_aliases` | `jti` | Federation mode only, the losing variants of a benign refresh fork, still accepted once so their client can move to the winning chain |
 | `security_token_revocations` | `id` | The persisted denylist with `session`, `user` or `token` scope, moving from `pending` to `enforced`, kept only for the access TTL plus leeway |
 | `security_verifying_keys` | `id` | Public Ed25519 keys published by instances, looked up by `kid`; a `revoked` key is rejected everywhere |
+| `security_flow_states` | `key` | External-identity set only. Single-use state of multi-step sign-ins (a sign-in waiting for the local password, an external sign-in waiting for a second factor, a redirect to an identity provider) as an opaque `value` with an `expires_at` |
 
 `security_sessions.amr` was added by `0002_session_amr.sql`. It holds the RFC 8176 authentication methods the session was opened with, sorted (for example `{mfa,otp,pwd}`), and every access token the session issues carries it. The column has the constant default `{pwd}`, so adding it needed no table rewrite and fired no change-feed trigger for existing sessions.
 
 `merge_rev` is bumped by every write to a session (rotation, ending, compromise, and merges). It is the revision that federation merges compare-and-swap against; outside federation mode nothing reads it.
+
+`identity_external_identities` and `security_flow_states` exist only when the `external-identity` feature is used, live on the authority alone and are not in the change feed. An identity is found by its exact `(issuer, subject)` and never by `email`, which is kept only to show the user. A flow-state `key` is the flow's kind, a colon and the SHA-256 of the token handed to the client, so the table holds no usable token. `expires_at` is `now()` plus the TTL at insert, a take deletes the row and returns its value only while `expires_at > now()`, and `ZAuth::tick` deletes the expired rows through `PgFlowStateRepository::purge_expired`.
 
 `security_token_revocations.subject` holds a session id, a user id or an access token `jti` depending on `scope`, so it has no foreign key, and a revocation row can outlive the row it refers to. That is intended, because a revocation must keep blocking tokens even after the session it names has been purged.
 
@@ -101,7 +105,7 @@ stateDiagram-v2
 
 ## Entity-relationship diagram
 
-The diagram covers the core and mfa sets. Solid lines are foreign keys, and every foreign key in the schema is `ON DELETE CASCADE`, so deleting a user removes their assignments, grants, sessions (with generations and aliases) and mfa rows, and deleting a session removes its generations and aliases. The dotted lines from `security_token_revocations` are logical references through `subject` without a constraint. `security_verifying_keys` stands alone, and `mfa_challenges.code_factor_id` refers to a factor without a foreign key. The cluster tables have no foreign keys and are drawn separately in [federation storage](federation.md).
+The diagram covers the core, mfa and external-identity sets. Solid lines are foreign keys, and every foreign key in the schema is `ON DELETE CASCADE`, so deleting a user removes their assignments, grants, sessions (with generations and aliases), mfa rows and linked external identities, and deleting a session removes its generations and aliases. The dotted lines from `security_token_revocations` are logical references through `subject` without a constraint. `security_verifying_keys` and `security_flow_states` stand alone, and `mfa_challenges.code_factor_id` refers to a factor without a foreign key. The cluster tables have no foreign keys and are drawn separately in [federation storage](federation.md).
 
 ```mermaid
 erDiagram
@@ -124,6 +128,7 @@ erDiagram
     identity_users ||--o{ mfa_challenges : "is challenged"
     identity_users ||--o| mfa_user_state : "fails or is locked"
     mfa_factors |o..o{ mfa_challenges : "code sent through"
+    identity_users ||--o{ identity_external_identities : "signs in through"
 
     identity_users {
         uuid id PK "gen_random_uuid()"
@@ -318,6 +323,23 @@ erDiagram
         timestamptz window_started_at "now()"
         timestamptz locked_until
     }
+
+    identity_external_identities {
+        uuid id PK "gen_random_uuid()"
+        uuid user_id FK
+        varchar(64) provider "host's provider name"
+        text issuer UK "unique with subject"
+        text subject UK "unique with issuer"
+        varchar(255) email "reported at linking"
+        timestamptz created_at "now(), when linked"
+        timestamptz last_login_at
+    }
+
+    security_flow_states {
+        varchar(255) key PK "kind:SHA-256 of the token"
+        text value "opaque"
+        timestamptz expires_at "now() + TTL"
+    }
 ```
 
 ## ENUM types
@@ -444,6 +466,14 @@ Which column of a grant row is filled for which permission kind is enforced by z
 | `mfa_challenges` | `chk_mfa_challenges_code` | check | A `code_hash` is 32 bytes and comes with `code_factor_id`, `code_expires_at` and `code_sent_at` |
 | `mfa_challenges` | `idx_mfa_challenges_expires_at` | index on `expires_at` | Purge of expired challenges |
 
+### External-identity constraints and indexes
+
+| Table | Name | Kind | Rule or purpose |
+|---|---|---|---|
+| `identity_external_identities` | `uq_identity_external_identities_subject` | unique constraint on `(issuer, subject)` | An identity belongs to at most one user; also serves lookups at sign-in |
+| `identity_external_identities` | `idx_identity_external_identities_user` | index on `(user_id, created_at)` | A user's identities, oldest first |
+| `security_flow_states` | `idx_security_flow_states_expires_at` | index on `expires_at` | Purge of expired flow states |
+
 ### Foreign keys
 
 Every foreign key cascades on delete. There are no foreign keys into or out of the cluster tables, and none from `security_token_revocations`.
@@ -466,9 +496,10 @@ Every foreign key cascades on delete. There are no foreign keys into or out of t
 | `fk_mfa_recovery_codes_user_id` | `mfa_recovery_codes.user_id` | `identity_users.id` |
 | `fk_mfa_challenges_user_id` | `mfa_challenges.user_id` | `identity_users.id` |
 | `fk_mfa_user_state_user_id` | `mfa_user_state.user_id` | `identity_users.id` |
+| `fk_identity_external_identities_user_id` | `identity_external_identities.user_id` | `identity_users.id` |
 
 The session-store schema keeps `fk_security_session_generations_session_id` and `fk_security_session_fork_aliases_session` but has no `fk_security_sessions_user_id`, because it has no users table.
 
 ## Constraint names and domain errors
 
-Seven of the unique indexes above double as the source of domain errors. When an insert or update violates one of them, PostgreSQL reports SQLSTATE `23505` with the constraint name, and `map_sqlx_error` in `src/errors.rs` translates the names listed in `src/constants.rs` into `AuthError::EmailAlreadyTaken`, `UsernameAlreadyTaken`, `RoleAlreadyExists`, `PermissionAlreadyExists`, `RoleAlreadyAssigned` or `SecondFactorAlreadyEnrolled`. Renaming one of those indexes in a migration therefore silently turns a precise error into `AuthError::Storage`; the constant must change in the same commit. Allowed status, scope and reason values need no such mapping, because the ENUM types reject anything else before a check could. The full table is in [internals](internals.md#error-mapping).
+Eight of the unique indexes and constraints above double as the source of domain errors. When an insert or update violates one of them, PostgreSQL reports SQLSTATE `23505` with the constraint name, and `map_sqlx_error` in `src/errors.rs` translates the names listed in `src/constants.rs` into `AuthError::EmailAlreadyTaken`, `UsernameAlreadyTaken`, `RoleAlreadyExists`, `PermissionAlreadyExists`, `RoleAlreadyAssigned`, `SecondFactorAlreadyEnrolled` or `ExternalIdentityLinkedElsewhere`, the last from `uq_identity_external_identities_subject` when an identity is already linked to another user. Renaming one of those indexes in a migration therefore silently turns a precise error into `AuthError::Storage`; the constant must change in the same commit. Allowed status, scope and reason values need no such mapping, because the ENUM types reject anything else before a check could. The full table is in [internals](internals.md#error-mapping).

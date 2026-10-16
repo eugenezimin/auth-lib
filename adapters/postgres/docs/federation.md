@@ -133,6 +133,7 @@ What it lacks is just as deliberate. There are no `identity_` tables, so no user
 | `cluster_account_snapshot_version_seq` | yes | no |
 | `security_permission_position_seq` | yes | no |
 | `mfa_` tables | with the mfa set | no |
+| `identity_external_identities`, `security_flow_states` | with the external-identity set | no |
 
 ### Giving the session store its own schema
 

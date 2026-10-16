@@ -15,6 +15,7 @@ Every repository funnels `sqlx::Error` through one function, `map_sqlx_error` in
 | `security_permissions_code_key` | `CONSTRAINT_SECURITY_PERMISSIONS_CODE` | `AuthError::PermissionAlreadyExists` |
 | `unique_user_role_active` | `CONSTRAINT_USER_ROLE_ACTIVE` | `AuthError::RoleAlreadyAssigned` |
 | `uq_mfa_factors_user_method_active` | `CONSTRAINT_MFA_FACTORS_ACTIVE` | `AuthError::SecondFactorAlreadyEnrolled` |
+| `uq_identity_external_identities_subject` | `CONSTRAINT_EXTERNAL_IDENTITIES_SUBJECT` | `AuthError::ExternalIdentityLinkedElsewhere` |
 | any other constraint, any other SQLSTATE | none | `AuthError::Storage` |
 
 Two of these deserve a note. `unique_user_role_active` rarely fires in practice, because `PgUserRoleRepository::assign` inserts with `ON CONFLICT DO NOTHING` and reports an existing active assignment by returning `false`. And `uq_mfa_factors_user_method_active` fires from `ACTIVATE_FACTOR`, when a pending factor is confirmed while the user already has an active factor of the same method.

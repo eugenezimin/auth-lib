@@ -38,8 +38,8 @@ jobs:
             exit 1
           fi
 
-      # Libraries, the setup_db binary (with the cluster and mfa migrations)
-      # and the keygen examples, all features on.
+      # Libraries, the setup_db binary (with the cluster, mfa and
+      # external-identity migrations) and the keygen examples, all features on.
       - name: Release build
         run: cargo build --release --target ${{ matrix.target }} --workspace --all-features --lib --bins --examples
 

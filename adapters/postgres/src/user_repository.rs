@@ -150,6 +150,7 @@ impl UserRepository for PgUserRepository {
             .bind(&new_user.username)
             .bind(&new_user.first_name)
             .bind(&new_user.last_name)
+            .bind(new_user.is_verified)
             .fetch_one(&self.pool)
             .await
             .map_err(map_sqlx_error)?;

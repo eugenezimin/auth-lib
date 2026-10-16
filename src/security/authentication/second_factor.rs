@@ -24,14 +24,16 @@ pub struct VerifiedSecondFactor {
     /// The user the challenge was issued to.
     pub user_id: Uuid,
     /// RFC 8176 methods the proof adds to the session's `amr` (e.g.
-    /// `["otp"]`).  z-auth adds `pwd` and `mfa`.
+    /// `["otp"]`).  z-auth adds the first factor's (`pwd`, or `fed` for an
+    /// external identity) and `mfa`.
     pub amr: Vec<String>,
 }
 
 #[async_trait]
 pub trait SecondFactorGate: Send + Sync {
-    /// After the password matched and the account is active, before any
-    /// session exists.  May also refuse the login (e.g.
+    /// After the first factor — the password, or an external identity
+    /// provider — succeeded and the account is active, before any session
+    /// exists.  May also refuse the login (e.g.
     /// [`AuthError::SecondFactorLocked`]).
     async fn on_password_verified(
         &self,

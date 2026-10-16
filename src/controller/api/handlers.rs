@@ -17,12 +17,16 @@
 //! }
 //! ```
 
+use uuid::Uuid;
+
 use crate::controller::api::dto::{
-    CompleteLoginRequest, LoginRequest, LoginResponse, PermissionCatalogResponse, RefreshRequest,
-    RegisterRequest, RevokeRequest, RevokeResponse, TokenPairResponse, UserResponse,
+    CompleteLoginRequest, ConfirmLinkRequest, ExternalIdentityResponse, LoginRequest,
+    LoginResponse, PermissionCatalogResponse, RefreshRequest, RegisterRequest, RevokeRequest,
+    RevokeResponse, TokenPairResponse, UserResponse,
 };
 use crate::controller::api::error::ApiError;
 use crate::identity::user::service::UserService;
+use crate::security::authentication::linking::AccountLinkService;
 use crate::security::authentication::model::ClientContext;
 use crate::security::authentication::service::AuthenticationService;
 use crate::security::authorization::service::PermissionService;
@@ -53,6 +57,41 @@ pub async fn complete_login(
     ctx: ClientContext,
 ) -> Result<TokenPairResponse, ApiError> {
     Ok(auth.complete_login(req.into(), ctx).await?.into())
+}
+
+/// `POST /login/link` — answer a `link_confirmation_required` sign-in with
+/// the existing account's password: links the external identity, then
+/// logs in (tokens, or a second-factor challenge).
+pub async fn confirm_link(
+    auth: &dyn AuthenticationService,
+    req: ConfirmLinkRequest,
+    ctx: ClientContext,
+) -> Result<LoginResponse, ApiError> {
+    Ok(auth.confirm_link(req.into(), ctx).await?.into())
+}
+
+/// `GET /me/identities` with a valid bearer access token — the external
+/// identities linked to its user.
+pub async fn external_identities(
+    auth: &dyn AuthenticationService,
+    links: &dyn AccountLinkService,
+    bearer: &str,
+) -> Result<Vec<ExternalIdentityResponse>, ApiError> {
+    let claims = auth.verify_access_token(bearer).await?;
+    let identities = links.list(claims.sub).await?;
+    Ok(identities.into_iter().map(Into::into).collect())
+}
+
+/// `DELETE /me/identities/{id}` with a bearer access token of a recent
+/// session.  Refused for the user's last way to log in.
+pub async fn unlink_external_identity(
+    auth: &dyn AuthenticationService,
+    links: &dyn AccountLinkService,
+    bearer: &str,
+    identity_id: Uuid,
+) -> Result<ExternalIdentityResponse, ApiError> {
+    let claims = auth.verify_access_token(bearer).await?;
+    Ok(links.unlink(claims.sid, identity_id).await?.into())
 }
 
 /// `POST /refresh` — the only endpoint that touches session storage.

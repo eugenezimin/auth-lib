@@ -92,10 +92,11 @@ impl UserService for UserServiceImpl {
 
         let new_user = NewUser {
             email,
-            password_hash,
+            password_hash: Some(password_hash),
             username: req.username,
             first_name: req.first_name,
             last_name: req.last_name,
+            is_verified: false,
         };
 
         self.user_repo.create(new_user).await

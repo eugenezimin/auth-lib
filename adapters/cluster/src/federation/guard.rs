@@ -14,6 +14,7 @@ use crate::federation::store::SyncStore;
 use z_auth::identity::access::model::{NewRole, Role, RoleUpdate, UserRole};
 use z_auth::identity::access::repository::{RoleRepository, UserRoleRepository};
 use z_auth::identity::access::service::RoleService;
+use z_auth::identity::external::{ExternalPrincipal, ProviderPolicy};
 use z_auth::identity::user::model::{
     NewUser, RegisterUser, UpdateUser, User, UserPage, UserQuery, UserUpdate, UserWithRoles,
 };
@@ -21,7 +22,8 @@ use z_auth::identity::user::repository::UserRepository;
 use z_auth::identity::user::service::UserService;
 use z_auth::security::authentication::account::{RefreshAccount, RefreshAccountSource};
 use z_auth::security::authentication::model::{
-    ClientContext, Credentials, LoginOutcome, SecondFactorProof, TokenPair,
+    ClientContext, Credentials, ExternalLoginOutcome, LinkConfirmation, LoginOutcome,
+    SecondFactorProof, TokenPair,
 };
 use z_auth::security::authentication::service::AuthenticationService;
 use z_auth::security::authorization::catalog::CatalogCache;
@@ -227,8 +229,8 @@ impl PermissionService for SnapshotPermissions {
     }
 }
 
-/// Login (both steps) belongs to the authority; everything else is served
-/// here.
+/// Login (every step, external sign-in included) belongs to the authority;
+/// everything else is served here.
 pub struct NotAuthorityLogin {
     pub authority: Authority,
     pub inner: Arc<dyn AuthenticationService>,
@@ -237,6 +239,21 @@ pub struct NotAuthorityLogin {
 #[async_trait]
 impl AuthenticationService for NotAuthorityLogin {
     async fn login(&self, _: Credentials, _: ClientContext) -> Result<LoginOutcome, AuthError> {
+        self.authority.deny()
+    }
+    async fn login_external(
+        &self,
+        _: ExternalPrincipal,
+        _: ProviderPolicy,
+        _: ClientContext,
+    ) -> Result<ExternalLoginOutcome, AuthError> {
+        self.authority.deny()
+    }
+    async fn confirm_link(
+        &self,
+        _: LinkConfirmation,
+        _: ClientContext,
+    ) -> Result<LoginOutcome, AuthError> {
         self.authority.deny()
     }
     async fn complete_login(

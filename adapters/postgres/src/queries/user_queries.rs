@@ -7,8 +7,8 @@
 //! the case-insensitive unique indexes `users_email` / `users_username_key`.
 
 pub const INSERT_USER: &str = r#"
-    INSERT INTO identity_users (email, password_hash, username, first_name, last_name)
-    VALUES ($1, $2, $3, $4, $5)
+    INSERT INTO identity_users (email, password_hash, username, first_name, last_name, is_verified)
+    VALUES ($1, $2, $3, $4, $5, $6)
     RETURNING
         id, email, password_hash, username,
         first_name, last_name, avatar_url,

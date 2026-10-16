@@ -97,6 +97,29 @@ impl From<AuthError> for ApiError {
                 code: "code_delivery_failed",
                 message: "the code could not be delivered; retry later".into(),
             },
+            ExternalLoginFailed(_) => {
+                Self::client(HTTP_UNAUTHORIZED, "external_login_failed", &err)
+            }
+            ExternalProviderUnavailable(_) => Self {
+                status: HTTP_SERVICE_UNAVAILABLE,
+                code: "external_provider_unavailable",
+                message: "the identity provider could not be reached; retry later".into(),
+            },
+            UnknownProvider(_) => Self::client(HTTP_NOT_FOUND, "unknown_provider", &err),
+            ExternalIdentityNotLinked => {
+                Self::client(HTTP_FORBIDDEN, "external_identity_not_linked", &err)
+            }
+            ExternalIdentityLinkedElsewhere => {
+                Self::client(HTTP_CONFLICT, "external_identity_linked_elsewhere", &err)
+            }
+            ProviderAlreadyLinked => Self::client(HTTP_CONFLICT, "provider_already_linked", &err),
+            ExternalIdentityNotFound => {
+                Self::client(HTTP_NOT_FOUND, "external_identity_not_found", &err)
+            }
+            LastLoginMethod => Self::client(HTTP_CONFLICT, "last_login_method", &err),
+            ReauthenticationRequired => {
+                Self::client(HTTP_UNAUTHORIZED, "reauthentication_required", &err)
+            }
             ClusterMessageRejected(_) => {
                 Self::client(HTTP_UNAUTHORIZED, "cluster_message_rejected", &err)
             }

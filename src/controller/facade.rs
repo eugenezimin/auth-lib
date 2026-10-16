@@ -43,9 +43,13 @@ use crate::controller::extension::{
 use crate::eventing::{EventPublisher, FanoutPublisher, NoopPublisher};
 use crate::identity::access::{RoleService, RoleServiceImpl};
 use crate::identity::credentials::PasswordHasher;
+use crate::identity::external::{
+    ExternalIdentityEvents, ExternalIdentityRepository, NoopExternalIdentityEvents,
+};
 use crate::identity::user::{UserService, UserServiceImpl};
 use crate::security::authentication::{
-    AuthenticationService, AuthenticationServiceImpl, RefreshAccountSource, StoreAccountSource,
+    AccountLinkService, AccountLinkServiceImpl, AuthenticationService, AuthenticationServiceImpl,
+    ExternalStores, FlowStateRepository, RefreshAccountSource, StoreAccountSource,
 };
 use crate::security::authorization::{
     Authorizer, AuthorizerImpl, AuthzClaimsProviderImpl, BitsetPermissionCodec, CatalogCache,
@@ -85,6 +89,8 @@ pub struct TickReport {
     pub enforced: usize,
     /// Expired denylist entries dropped.
     pub pruned: usize,
+    /// Expired flow states (pending sign-ins) deleted.
+    pub flows_purged: u64,
     /// One per extension that reported.
     pub extensions: Vec<ExtensionReport>,
 }
@@ -117,6 +123,8 @@ pub struct ZAuth {
     permissions: Arc<dyn PermissionService>,
     authorizer: Arc<dyn Authorizer>,
     authentication: Arc<dyn AuthenticationService>,
+    account_links: Arc<dyn AccountLinkService>,
+    flows: Option<Arc<dyn FlowStateRepository>>,
     revocation: Arc<dyn TokenRevocationService>,
     verifier: Arc<TokenVerifier>,
 }
@@ -145,6 +153,18 @@ impl ZAuth {
     }
     pub fn authentication(&self) -> &dyn AuthenticationService {
         self.authentication.as_ref()
+    }
+    /// Linking external identities to signed-in users.  Fails with
+    /// [`AuthError::Config`] unless the builder got
+    /// [`external_identities`](ZAuthBuilder::external_identities).
+    pub fn account_links(&self) -> &dyn AccountLinkService {
+        self.account_links.as_ref()
+    }
+    /// The flow-state store given to
+    /// [`external_identities`](ZAuthBuilder::external_identities), for
+    /// protocol adapters (e.g. z-auth-sso) to keep redirect state in.
+    pub fn flow_states(&self) -> Option<&Arc<dyn FlowStateRepository>> {
+        self.flows.as_ref()
     }
     pub fn revocation(&self) -> &dyn TokenRevocationService {
         self.revocation.as_ref()
@@ -206,7 +226,7 @@ impl ZAuth {
 
     /// Call periodically (with a cluster: every heartbeat): enforce
     /// revocations whose tokens were presented, drop expired denylist
-    /// entries, and tick the extensions.
+    /// entries and flow states, and tick the extensions.
     pub async fn tick(&self) -> Result<TickReport, AuthError> {
         // A fenced instance enforces nothing; it only reports.
         let enforced = if self.is_fenced() {
@@ -215,6 +235,10 @@ impl ZAuth {
             self.revocation.enforce_pending().await?
         };
         let pruned = self.denylist().prune(self.clock.now());
+        let flows_purged = match &self.flows {
+            Some(flows) => flows.purge_expired().await?,
+            None => 0,
+        };
         let mut extensions = Vec::new();
         for ext in &self.extensions {
             extensions.extend(ext.tick().await?);
@@ -222,6 +246,7 @@ impl ZAuth {
         Ok(TickReport {
             enforced,
             pruned,
+            flows_purged,
             extensions,
         })
     }
@@ -251,6 +276,11 @@ pub struct ZAuthBuilder {
     refresh_codec: Option<Arc<dyn RefreshTokenCodec>>,
     denylist: Option<Arc<Denylist>>,
     clock: Option<Arc<dyn Clock>>,
+    external: Option<(
+        Arc<dyn ExternalIdentityRepository>,
+        Arc<dyn FlowStateRepository>,
+    )>,
+    external_events: Option<Arc<dyn ExternalIdentityEvents>>,
 }
 
 impl ZAuthBuilder {
@@ -267,6 +297,8 @@ impl ZAuthBuilder {
             refresh_codec: None,
             denylist: None,
             clock: None,
+            external: None,
+            external_events: None,
         }
     }
 
@@ -318,6 +350,21 @@ impl ZAuthBuilder {
     /// Persisted timestamps always come from the repositories' store.
     pub fn clock(mut self, clock: Arc<dyn Clock>) -> Self {
         self.clock = Some(clock);
+        self
+    }
+    /// Enable sign-in through external identity providers and account
+    /// linking: where linked identities and pending sign-ins are kept.
+    pub fn external_identities(
+        mut self,
+        identities: Arc<dyn ExternalIdentityRepository>,
+        flows: Arc<dyn FlowStateRepository>,
+    ) -> Self {
+        self.external = Some((identities, flows));
+        self
+    }
+    /// Told about every link and unlink.  Defaults to none.
+    pub fn external_identity_events(mut self, events: Arc<dyn ExternalIdentityEvents>) -> Self {
+        self.external_events = Some(events);
         self
     }
 
@@ -488,6 +535,26 @@ impl ZAuthBuilder {
             Some(gate) => authentication.with_second_factor(gate),
             None => authentication,
         };
+        let external_events = self
+            .external_events
+            .unwrap_or_else(|| Arc::new(NoopExternalIdentityEvents));
+        let external = self.external.map(|(identities, flows)| ExternalStores {
+            identities,
+            flows,
+            events: external_events,
+        });
+        let authentication = match &external {
+            Some(stores) => authentication.with_external(stores.clone()),
+            None => authentication,
+        };
+        let flows = external.as_ref().map(|s| s.flows.clone());
+        let account_links: Arc<dyn AccountLinkService> = Arc::new(AccountLinkServiceImpl::new(
+            repos.users.clone(),
+            repos.sessions.clone(),
+            external,
+            clock.clone(),
+            self.config.external.link_max_auth_age,
+        ));
         let users: Arc<dyn UserService> = Arc::new(UserServiceImpl::new(
             repos.users.clone(),
             hasher,
@@ -528,6 +595,8 @@ impl ZAuthBuilder {
             permissions,
             authorizer: Arc::new(AuthorizerImpl::new(catalog, codec)),
             authentication,
+            account_links,
+            flows,
             revocation,
             verifier,
             node_id,

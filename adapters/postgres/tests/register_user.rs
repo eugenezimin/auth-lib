@@ -346,10 +346,11 @@ async fn test_db_unique_indexes_are_case_insensitive() {
     let tag = uuid::Uuid::new_v4().simple().to_string();
     let new_user = |email: String, username: String| NewUser {
         email,
-        password_hash: "not-a-real-hash".into(),
+        password_hash: Some("not-a-real-hash".into()),
         username: Some(username),
         first_name: None,
         last_name: None,
+        is_verified: false,
     };
 
     let user = repo

@@ -39,6 +39,9 @@ struct State {
     user_grants: Vec<GrantRow>,
     role_grants: Vec<GrantRow>,
     keys: HashMap<String, VerifyingKeyRecord>,
+    external_identities: HashMap<Uuid, ExternalIdentity>,
+    /// key → (value, expires_at)
+    flows: HashMap<String, (String, DateTime<Utc>)>,
     #[cfg(feature = "shared")]
     nodes: HashMap<Uuid, NodeRecord>,
     #[cfg(feature = "shared")]
@@ -153,6 +156,19 @@ impl InMemoryDb {
     pub fn revocations(&self) -> Vec<Revocation> {
         self.lock().revocations.clone()
     }
+
+    /// Stored flow-state entries, expired ones included (for assertions).
+    pub fn flow_count(&self) -> usize {
+        self.lock().flows.len()
+    }
+
+    /// Mark a user's email verified (z-auth has no verification flow of its
+    /// own; hosts set the flag in storage).
+    pub fn set_verified(&self, user_id: Uuid, verified: bool) {
+        if let Some(user) = self.lock().users.get_mut(&user_id) {
+            user.is_verified = verified;
+        }
+    }
 }
 
 impl State {
@@ -266,13 +282,13 @@ impl UserRepository for InMemoryDb {
         let user = User {
             id: Uuid::new_v4(),
             email: new_user.email,
-            password_hash: Some(new_user.password_hash),
+            password_hash: new_user.password_hash,
             username: new_user.username,
             first_name: new_user.first_name,
             last_name: new_user.last_name,
             avatar_url: None,
             is_active: true,
-            is_verified: false,
+            is_verified: new_user.is_verified,
             created_at: now,
             updated_at: now,
         };
@@ -324,6 +340,7 @@ impl UserRepository for InMemoryDb {
         }
         s.user_roles.retain(|ur| ur.user_id != user_id);
         s.user_grants.retain(|g| g.owner != user_id);
+        s.external_identities.retain(|_, i| i.user_id != user_id);
         let owned: Vec<Uuid> = s
             .sessions
             .values()
@@ -873,6 +890,102 @@ impl KeyRepository for InMemoryDb {
 
     async fn list(&self) -> Result<Vec<VerifyingKeyRecord>, AuthError> {
         Ok(self.lock().keys.values().cloned().collect())
+    }
+}
+
+// ── ExternalIdentityRepository ────────────────────────────────────────────────
+
+#[async_trait]
+impl ExternalIdentityRepository for InMemoryDb {
+    async fn find_by_subject(
+        &self,
+        issuer: &str,
+        subject: &str,
+    ) -> Result<Option<ExternalIdentity>, AuthError> {
+        Ok(self
+            .lock()
+            .external_identities
+            .values()
+            .find(|i| i.issuer == issuer && i.subject == subject)
+            .cloned())
+    }
+    async fn find(&self, id: Uuid) -> Result<Option<ExternalIdentity>, AuthError> {
+        Ok(self.lock().external_identities.get(&id).cloned())
+    }
+    async fn list_for_user(&self, user_id: Uuid) -> Result<Vec<ExternalIdentity>, AuthError> {
+        let mut found: Vec<_> = self
+            .lock()
+            .external_identities
+            .values()
+            .filter(|i| i.user_id == user_id)
+            .cloned()
+            .collect();
+        found.sort_by_key(|i| (i.created_at, i.id));
+        Ok(found)
+    }
+    async fn create(&self, new: NewExternalIdentity) -> Result<ExternalIdentity, AuthError> {
+        let now = self.now();
+        let mut s = self.lock();
+        if s.external_identities
+            .values()
+            .any(|i| i.issuer == new.issuer && i.subject == new.subject)
+        {
+            return Err(AuthError::ExternalIdentityLinkedElsewhere);
+        }
+        if !s.users.contains_key(&new.user_id) {
+            return Err(AuthError::UserNotFound);
+        }
+        let identity = ExternalIdentity {
+            id: Uuid::new_v4(),
+            user_id: new.user_id,
+            provider: new.provider,
+            issuer: new.issuer,
+            subject: new.subject,
+            email: new.email,
+            created_at: now,
+            last_login_at: None,
+        };
+        s.external_identities.insert(identity.id, identity.clone());
+        Ok(identity)
+    }
+    async fn delete(&self, id: Uuid) -> Result<bool, AuthError> {
+        Ok(self.lock().external_identities.remove(&id).is_some())
+    }
+    async fn record_login(&self, id: Uuid) -> Result<(), AuthError> {
+        let now = self.now();
+        if let Some(identity) = self.lock().external_identities.get_mut(&id) {
+            identity.last_login_at = Some(now);
+        }
+        Ok(())
+    }
+}
+
+// ── FlowStateRepository ───────────────────────────────────────────────────────
+
+#[async_trait]
+impl FlowStateRepository for InMemoryDb {
+    async fn put(&self, key: &str, value: &str, ttl: Duration) -> Result<(), AuthError> {
+        let expires_at = self.now() + ttl;
+        self.lock()
+            .flows
+            .insert(key.to_string(), (value.to_string(), expires_at));
+        Ok(())
+    }
+    async fn take(&self, key: &str) -> Result<Option<String>, AuthError> {
+        let now = self.now();
+        Ok(self
+            .lock()
+            .flows
+            .remove(key)
+            .filter(|(_, expires_at)| *expires_at > now)
+            .map(|(value, _)| value))
+    }
+    async fn purge_expired(&self) -> Result<u64, AuthError> {
+        let now = self.now();
+        let mut s = self.lock();
+        let before = s.flows.len();
+        s.flows.retain(|_, (_, expires_at)| *expires_at > now);
+        Ok((before - s.flows.len()) as u64)
     }
 }
 
