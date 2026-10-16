@@ -27,6 +27,12 @@
 //! - `federation` *(implies `shared`)* — the federation sync store
 //!   ([`PgSyncStore`]) and the session-store schema
 //!   ([`SESSION_STORE_MIGRATOR`]).
+//! - `mfa` — z-auth-mfa's second-factor store ([`PgMfaRepository`]) and its
+//!   migration set ([`MFA_MIGRATOR`], [`run_mfa_migrations`]).
+//!
+//! The migration sets share `_sqlx_migrations` and never collide: core
+//! versions are below 1000, cluster versions 1001–1999, mfa versions from
+//! 2001.
 //!
 //! ```rust,ignore
 //! // features = ["shared"]
@@ -45,6 +51,8 @@ pub mod constants;
 mod enums;
 mod errors;
 mod key_repository;
+#[cfg(feature = "mfa")]
+mod mfa;
 mod permission_repository;
 pub mod pool;
 mod queries;
@@ -61,6 +69,8 @@ pub use cluster::PgNodeRepository;
 pub use cluster::PgSyncStore;
 pub use config::PgConfig;
 pub use key_repository::PgKeyRepository;
+#[cfg(feature = "mfa")]
+pub use mfa::PgMfaRepository;
 pub use permission_repository::PgPermissionRepository;
 pub use pool::build_pg_pool;
 pub use revocation_repository::PgRevocationRepository;
@@ -132,6 +142,22 @@ pub async fn run_session_store_migrations(
 /// ```
 pub async fn run_migrations(pool: &sqlx::PgPool) -> Result<(), sqlx::migrate::MigrateError> {
     MIGRATOR.run(pool).await
+}
+
+/// z-auth-mfa's tables (`migrations_mfa/`, versions from 2001): factors,
+/// recovery codes, login challenges and lockout state.  Applied on top of
+/// [`MIGRATOR`]; see [`run_mfa_migrations`].
+#[cfg(feature = "mfa")]
+pub static MFA_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate::Migrator {
+    ignore_missing: true,
+    ..sqlx::migrate!("./migrations_mfa")
+};
+
+/// Apply every pending core migration, then every pending mfa one.
+#[cfg(feature = "mfa")]
+pub async fn run_mfa_migrations(pool: &sqlx::PgPool) -> Result<(), sqlx::migrate::MigrateError> {
+    MIGRATOR.run(pool).await?;
+    MFA_MIGRATOR.run(pool).await
 }
 
 /// Apply every pending core migration, then every pending cluster one.

@@ -73,9 +73,9 @@ jobs:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      # Creates the database and applies the core and cluster migrations.
+      # Creates the database and applies the core, cluster and mfa migrations.
       - name: setup_db
-        run: cargo run -p z-auth-postgres --features shared --bin setup_db -- --cluster
+        run: cargo run -p z-auth-postgres --features shared,mfa --bin setup_db -- --cluster --mfa
       - run: cargo test -p z-auth-postgres --all-features
 
   features:

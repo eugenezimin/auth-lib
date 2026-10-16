@@ -66,6 +66,16 @@ pub async fn cluster_pool() -> sqlx::PgPool {
     pool
 }
 
+/// A pool with the core and the mfa migrations applied (feature `mfa`).
+#[cfg(feature = "mfa")]
+pub async fn mfa_pool() -> sqlx::PgPool {
+    let pool = pool().await;
+    z_auth_postgres::run_mfa_migrations(&pool)
+        .await
+        .expect("Failed to run mfa migrations");
+    pool
+}
+
 /// A pool on a fresh schema with the session-store migrations applied
 /// (federation mode, non-authority services).
 #[cfg(feature = "federation")]

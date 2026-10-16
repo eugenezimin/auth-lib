@@ -21,6 +21,7 @@ pub(crate) fn map_sqlx_error(e: sqlx::Error) -> AuthError {
             }
             CONSTRAINT_SECURITY_PERMISSIONS_CODE => return AuthError::PermissionAlreadyExists,
             CONSTRAINT_USER_ROLE_ACTIVE => return AuthError::RoleAlreadyAssigned,
+            CONSTRAINT_MFA_FACTORS_ACTIVE => return AuthError::SecondFactorAlreadyEnrolled,
             _ => {}
         }
     }
