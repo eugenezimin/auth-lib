@@ -1,16 +1,16 @@
 # Storage ports
 
-z-auth ships no database code. Everything it persists goes through seven repository traits that the host implements on whatever store it uses, and this guide is the contract for writing such an adapter. It describes the ground rules that apply to every port, then each trait method by method with the guarantees the core relies on. Two complete implementations exist to copy from. `z_auth_testkit::InMemoryDb` implements every port over one mutex-protected state for the test suites, and `z-auth-postgres` is the production reference on sqlx, documented in the [PostgreSQL adapter guide](../adapters/postgres/README.md) and its [internals guide](../adapters/postgres/docs/internals.md).
+z-auth ships no database code. Everything it persists goes through nine repository traits that the host implements on whatever store it uses, and this guide is the contract for writing such an adapter. It describes the ground rules that apply to every port, then each trait method by method with the guarantees the core relies on. Two complete implementations exist to copy from. `z_auth_testkit::InMemoryDb` implements every port over one mutex-protected state for the test suites, and `z-auth-postgres` is the production reference on sqlx, documented in the [PostgreSQL adapter guide](../adapters/postgres/README.md) and its [internals guide](../adapters/postgres/docs/internals.md).
 
 ## Ground rules
 
 Every port is an `async_trait` trait with `Send + Sync` bounds, so implementations can be shared behind `Arc` across tasks. Methods return `Result<_, AuthError>`, and `Ok(None)` or `Ok(false)` mean "not found" or "nothing to do" rather than errors.
 
-The store is the clock. Every persisted timestamp (session creation and expiry, generation issue and supersession, revocation cutoffs and expiries, enforcement, assignment and revocation of roles, key publication) must be taken from the store's own clock, such as `now()` in SQL. The core never sends instants for persisted data. It passes durations (`SessionLifetimes`, a revocation `ttl`, a purge `retention`) and reads back what was stored, which keeps every instance consistent even when their local clocks drift. Where the contract says "now", take it once per operation, so that values written together share the same instant.
+The store is the clock. Every persisted timestamp (session creation and expiry, generation issue and supersession, revocation cutoffs and expiries, enforcement, assignment and revocation of roles, key publication, the linking and last sign-in of external identities, flow-state expiry) must be taken from the store's own clock, such as `now()` in SQL. The core never sends instants for persisted data. It passes durations (`SessionLifetimes`, a revocation `ttl`, a flow-state `ttl`, a purge `retention`) and reads back what was stored, which keeps every instance consistent even when their local clocks drift. Where the contract says "now", take it once per operation, so that values written together share the same instant.
 
-Errors are mapped at the adapter boundary so the core never depends on a driver's error type. Driver failures become `AuthError::Storage` with a message, which `ApiError` turns into a generic 500 response. Unique-constraint violations become the specific domain errors named in each contract, which are `EmailAlreadyTaken` and `UsernameAlreadyTaken` for users, `RoleAlreadyExists` for roles and `PermissionAlreadyExists` for permissions. The PostgreSQL adapter does this by constraint name in a single `map_sqlx_error` function.
+Errors are mapped at the adapter boundary so the core never depends on a driver's error type. Driver failures become `AuthError::Storage` with a message, which `ApiError` turns into a generic 500 response. Unique-constraint violations become the specific domain errors named in each contract, which are `EmailAlreadyTaken` and `UsernameAlreadyTaken` for users, `RoleAlreadyExists` for roles, `PermissionAlreadyExists` for permissions and `ExternalIdentityLinkedElsewhere` for external identities. The PostgreSQL adapter does this by constraint name in a single `map_sqlx_error` function.
 
-Atomicity matters in three places. `SessionRepository::create` writes a session and its first generation together, `SessionRepository::rotate` is a compare-and-swap, and `RevocationRepository::mark_enforced` is a compare-and-swap. Everything else may be a plain statement.
+Atomicity matters in four places. `SessionRepository::create` writes a session and its first generation together, `SessionRepository::rotate` is a compare-and-swap, `RevocationRepository::mark_enforced` is a compare-and-swap, and `FlowStateRepository::take` hands an entry to at most one caller. Everything else may be a plain statement.
 
 ```mermaid
 classDiagram
@@ -95,6 +95,21 @@ classDiagram
         list_role_grants()
         effective_grants()
     }
+    class ExternalIdentityRepository {
+        <<trait>>
+        find_by_subject()
+        find()
+        list_for_user()
+        create()
+        delete()
+        record_login()
+    }
+    class FlowStateRepository {
+        <<trait>>
+        put()
+        take()
+        purge_expired()
+    }
     class Repositories {
         users
         roles
@@ -111,7 +126,7 @@ classDiagram
     Repositories --> KeyRepository
 ```
 
-The six ports in `Repositories` are required by every instance. `PermissionRepository` is passed separately with `ZAuthBuilder::permissions` and only needed in the `permissions` and `combined` authorization modes.
+The six ports in `Repositories` are required by every instance. `PermissionRepository` is passed separately with `ZAuthBuilder::permissions` and only needed in the `permissions` and `combined` authorization modes. `ExternalIdentityRepository` and `FlowStateRepository` are passed together with `ZAuthBuilder::external_identities` and only needed for sign-in through external identity providers and account linking. Without them `login_external`, `confirm_link` and every `AccountLinkService` call fail with `AuthError::Config`.
 
 ## UserRepository
 
@@ -123,13 +138,15 @@ The user port stores accounts. Emails reach it already normalized, trimmed and l
 | `find_with_roles_by_id`, `find_with_roles_by_email`, `find_with_roles_by_username` | The user with their active roles only (assignments without `revoked_at`), or `Ok(None)`. Login and refresh read the account this way, in one call |
 | `list(&UserQuery)` | One page ordered by `created_at` descending, ties broken by id. `search`, when set, is a case-insensitive substring match on email or username. `total` counts every match, not just the page. The service has already clamped `limit` to 1..=200 and dropped a blank search |
 | `exists_by_email`, `exists_by_username` | Whether a user exists, without loading it |
-| `create(NewUser)` | Insert and return the hydrated user. New users are active and unverified. `password_hash` is already hashed and stored verbatim. A duplicate email or username fails with `EmailAlreadyTaken` or `UsernameAlreadyTaken` |
+| `create(NewUser)` | Insert and return the hydrated user. New users are active, and `is_verified` is taken from `NewUser::is_verified`. `password_hash` is an `Option<String>`, already hashed and stored verbatim, and `None` stores a user without a password. A duplicate email or username fails with `EmailAlreadyTaken` or `UsernameAlreadyTaken` |
 | `update(user_id, UserUpdate)` | Apply the fields that are `Some`, leave the rest. `Ok(None)` if the user does not exist. Duplicates fail as in `create` |
-| `delete(user_id)` | Delete the user and its dependent data (sessions and role assignments). `Ok(Some(id))` if deleted, `Ok(None)` if not found |
+| `delete(user_id)` | Delete the user and its dependent data (sessions, role assignments and, when the store keeps them, external identities). `Ok(Some(id))` if deleted, `Ok(None)` if not found |
 | `activate`, `deactivate` | Set `is_active`. `Ok(false)` if the user does not exist. Only the flag; the user service ends the sessions |
 | `is_active`, `is_verified` | The flag, or `Ok(None)` if the user does not exist |
 
 The user service checks uniqueness before writing, but two concurrent registrations can still race, so the unique constraints and their mapping are what actually guarantee it.
+
+Registration always passes a password hash and `is_verified: false`. A user provisioned at a first external sign-in has no password hash, and starts verified when a provider trusted with emails vouched for the address, so the store must accept a missing hash and honour the flag.
 
 ## RoleRepository
 
@@ -239,6 +256,33 @@ Positions are permanent. `create` assigns one position to a `bool` or `text` per
 
 `effective_grants` merges the user's direct grants with, when `include_role_grants` is true, the grants of the user's active roles. For a `bool` permission the result is granted if any source grants it. For a `multi` permission it is the union of the chosen options. For `single` and `text` permissions the direct grant wins, and otherwise the grant of the role with the lexicographically lowest code. The result is an `EffectiveGrants` whose `grants` list one `PermissionGrant` per granted `bool` position and chosen option position (with `text: None`) and per granted `text` position (with the value), and whose `catalog_version` is read in the same call, so the encoded token and its `pv` agree.
 
+## ExternalIdentityRepository
+
+This port stores the identities of other providers (OpenID Connect, OAuth2 and the like) that are linked to users. It is optional and only used when the host calls `ZAuthBuilder::external_identities`. An identity is keyed by the provider's `(issuer, subject)` pair, which belongs to at most one user, while a user may have many identities. The `provider` field is the host's name for the provider configuration (`google`, `github`) and `email` is what the provider reported when the identity was linked. Neither is ever used to look an identity up.
+
+| Method | Contract |
+|---|---|
+| `find_by_subject(issuer, subject)` | The identity with exactly this pair, or `Ok(None)`. Compare both strings verbatim, without case folding or trimming, because they are the provider's identifiers |
+| `find(id)` | The identity, or `Ok(None)` |
+| `list_for_user(user_id)` | The user's identities, oldest first by `created_at` |
+| `create(NewExternalIdentity)` | Insert and return the identity with a store-assigned `id`, `created_at = now` and no `last_login_at`. An `(issuer, subject)` pair that is already stored fails with `ExternalIdentityLinkedElsewhere` |
+| `delete(id)` | Delete the identity. `Ok(false)` if it does not exist |
+| `record_login(id)` | Set `last_login_at = now` |
+
+Deleting a user must delete their identities too, which a foreign key with `ON DELETE CASCADE` does in SQL. The core checks for an existing link before it creates one, but two concurrent sign-ins through the same identity can still race, so the unique constraint on `(issuer, subject)` and its mapping to `ExternalIdentityLinkedElsewhere` are what keep an identity with one user. The per-provider cap of `ProviderPolicy::max_links` is enforced by the core, not by the store.
+
+## FlowStateRepository
+
+This port keeps the short-lived state of multi-step sign-ins as opaque strings under string keys. The core stores a sign-in that waits for the existing account's password (`confirm_link`) and, after an external sign-in, the first factor's methods while a second factor is pending. Protocol adapters such as z-auth-sso store their redirect state (OIDC `state`, nonce and PKCE verifier) through `ZAuth::flow_states()`. The port is passed together with `ExternalIdentityRepository` and is optional in the same way. Keys are built with `flow_key(kind, secret)`, which is the kind, a colon and the base64url SHA-256 of the token handed to the client (the secret itself without the `crypto` feature), so the store never holds a usable token. The adapter treats keys and values as opaque.
+
+| Method | Contract |
+|---|---|
+| `put(key, value, ttl)` | Store `value` under `key` with `expires_at = now + ttl`, computed by the store. An existing entry with the same key is replaced |
+| `take(key)` | Remove the entry and return its value if it has not expired, or `Ok(None)`. An expired entry is removed too but not returned. Atomic, so of concurrent calls with one key at most one gets the value |
+| `purge_expired` | Delete the entries whose expiry has passed and return the count |
+
+`take` is what makes every flow single use, so it must be one atomic operation, such as a `DELETE ... RETURNING` in SQL, rather than a read followed by a delete. `ZAuth::tick` calls `purge_expired` and reports the count as `TickReport::flows_purged`.
+
 ## Testing an adapter
 
-The core's own test suite runs against `InMemoryDb`, and the PostgreSQL adapter has integration tests for its repositories under `adapters/postgres/tests`. A new adapter can reuse the core scenarios by wiring its repositories into the same helpers. `z_auth_testkit::server_with` shows the wiring, and the [development guide](development.md) lists what the testkit provides. Scenarios worth covering explicitly are concurrent `rotate` calls on the same generation (exactly one `Rotated`), history trimming, `mark_enforced` racing between two callers (exactly one winner), case-insensitive username uniqueness, and permission positions surviving deletions.
+The core's own test suite runs against `InMemoryDb`, and the PostgreSQL adapter has integration tests for its repositories under `adapters/postgres/tests`. A new adapter can reuse the core scenarios by wiring its repositories into the same helpers. `z_auth_testkit::server_with` shows the wiring, and the [development guide](development.md) lists what the testkit provides. Scenarios worth covering explicitly are concurrent `rotate` calls on the same generation (exactly one `Rotated`), history trimming, `mark_enforced` racing between two callers (exactly one winner), case-insensitive username uniqueness, permission positions surviving deletions, and, for the optional ports, a duplicate `(issuer, subject)` failing with `ExternalIdentityLinkedElsewhere` and a flow state that is returned by one `take` only and by none once expired.

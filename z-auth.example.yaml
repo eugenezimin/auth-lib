@@ -34,6 +34,9 @@ auth:
     require_digit: true        # AUTH_PASSWORD_REQUIRE_DIGIT
   authz:
     mode: rbac                 # AUTH_AUTHZ_MODE – none | rbac | permissions | combined
+  external:                    # sign-in through identity providers (ZAuthBuilder::external_identities)
+    link_max_auth_age_secs: 600    # AUTH_EXTERNAL_LINK_MAX_AUTH_AGE_SECS – linking needs a login this recent
+    link_challenge_ttl_secs: 300   # AUTH_EXTERNAL_LINK_CHALLENGE_TTL_SECS – a sign-in waiting for the password
 
 # ── z-auth-cluster (optional) — ClusterSourceLoader ──────────────────────────
 cluster:
@@ -141,6 +144,58 @@ mfa:
         url: ~                 # AUTH_MFA_SMS_WEBHOOK_URL
         secret: ~              # AUTH_MFA_SMS_WEBHOOK_SECRET – HMAC-SHA256 signature (X-ZAuth-Signature)
         bearer_token: ~        # AUTH_MFA_SMS_WEBHOOK_BEARER_TOKEN
+
+# ── z-auth-sso (optional) — SsoSourceLoader ──────────────────────────────────
+# One mapping per identity provider under `providers`; the name is recorded
+# with every identity it links.  Every provider setting is also read from
+# AUTH_SSO_<NAME>_<SETTING> (`.` as `_`), which wins over the file, so keep
+# client secrets there.  AUTH_SSO_PROVIDERS names providers configured in
+# the environment alone.
+sso:
+  callback_url: https://app.example.com/auth/sso/callback   # AUTH_SSO_CALLBACK_URL – registered with every provider
+  flow_ttl_secs: 600           # AUTH_SSO_FLOW_TTL_SECS – how long a redirect to a provider stays valid
+  providers:
+    google:                    # OpenID Connect: the issuer is enough, the rest comes from discovery
+      kind: oidc               # oidc | oauth2 | github
+      display_name: Google
+      issuer: https://accounts.google.com
+      client_id: your-google-client-id
+      client_secret: ~         # AUTH_SSO_GOOGLE_CLIENT_SECRET
+      scopes: [openid, email, profile]   # the default for oidc
+      link: verified_email     # never | confirm_with_password (default) | verified_email
+      provisioning: create     # deny (default) | create
+      trust_email: true        # the provider's email_verified can be relied on (default false; github true)
+      trust_amr: false         # pass the provider's amr (e.g. mfa) on to the session
+      max_links: 1             # identities of this provider per user; 0 = unlimited
+    linkedin:
+      kind: oidc
+      display_name: LinkedIn
+      issuer: https://www.linkedin.com/oauth
+      client_id: your-linkedin-client-id
+      client_secret: ~         # AUTH_SSO_LINKEDIN_CLIENT_SECRET
+      scopes: [openid, email, profile]
+    github:                    # preset (feature `github`): verified emails from GitHub's API
+      kind: github
+      display_name: GitHub
+      client_id: your-github-client-id
+      client_secret: ~         # AUTH_SSO_GITHUB_CLIENT_SECRET – required
+    facebook:                  # plain OAuth2: endpoints and where the user info keeps each field
+      kind: oauth2
+      display_name: Facebook
+      issuer: https://www.facebook.com   # recorded as the identities' issuer
+      authorize_url: https://www.facebook.com/v19.0/dialog/oauth
+      token_url: https://graph.facebook.com/v19.0/oauth/access_token
+      userinfo_url: https://graph.facebook.com/me?fields=id,name,email,first_name,last_name
+      client_id: your-facebook-app-id
+      client_secret: ~         # AUTH_SSO_FACEBOOK_CLIENT_SECRET
+      scopes: [email, public_profile]
+      token_auth: post         # basic | post (default for oauth2)
+      pkce: true
+      claims:                  # JSON pointers into the user-info response
+        subject: /id
+        email: /email          # no email_verified pointer: emails count as unverified
+        first_name: /first_name
+        last_name: /last_name
 
 # ── z-auth-postgres (reference adapter) — PgConfig::from_source ──────────────
 database:

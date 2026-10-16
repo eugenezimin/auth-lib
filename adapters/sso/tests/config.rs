@@ -201,3 +201,30 @@ fn openid_is_always_requested_from_oidc_providers() {
     .unwrap();
     assert_eq!(s.providers[0].scopes, ["openid", "email"]);
 }
+
+#[test]
+fn the_example_file_loads() {
+    let example = concat!(env!("CARGO_MANIFEST_DIR"), "/../../z-auth.example.yaml");
+    let source = ConfigSource::yaml_file(example)
+        .unwrap()
+        .with_lookup(env(&[("AUTH_SSO_GITHUB_CLIENT_SECRET", "gh-secret")]));
+    let s = SsoSourceLoader::new(source).load_settings().unwrap();
+    assert_eq!(s.flow_ttl, Duration::from_secs(600));
+    let kinds: Vec<_> = s
+        .providers
+        .iter()
+        .map(|p| (p.name.as_str(), p.kind.name()))
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            ("facebook", "oauth2"),
+            ("github", "github"),
+            ("google", "oidc"),
+            ("linkedin", "oidc"),
+        ]
+    );
+    // Without its secret the GitHub preset is refused.
+    let bare = ConfigSource::yaml_file(example).unwrap();
+    assert!(SsoSourceLoader::new(bare).load_settings().is_err());
+}

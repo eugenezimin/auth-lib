@@ -34,7 +34,7 @@ CREATE TABLE "identity_external_identities" (
     CONSTRAINT uq_identity_external_identities_subject UNIQUE ("issuer", "subject")
 );
 
-CREATE INDEX identity_external_identities_user_id
+CREATE INDEX idx_identity_external_identities_user
     ON identity_external_identities USING btree (user_id, created_at);
 
 -- ── security_flow_states ──────────────────────────────────────────────────────
@@ -50,5 +50,5 @@ CREATE TABLE "security_flow_states" (
     PRIMARY KEY ("key")
 );
 
-CREATE INDEX security_flow_states_expires_at
+CREATE INDEX idx_security_flow_states_expires_at
     ON security_flow_states USING btree (expires_at);
