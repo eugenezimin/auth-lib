@@ -12,6 +12,9 @@ shared = ["dep:z-auth-cluster", "z-auth-cluster/shared"]
 federation = ["shared", "z-auth-cluster/federation"]
 # z-auth-mfa: the second-factor store and its migration set.
 mfa = ["dep:z-auth-mfa"]
+# External sign-in and account linking: linked identities, flow states and
+# their migration set.
+external-identity = []
 
 [[bin]]
 name = "setup_db"
@@ -48,3 +51,7 @@ required-features = ["federation"]
 [[test]]
 name = "mfa"
 required-features = ["mfa"]
+
+[[test]]
+name = "external_identity"
+required-features = ["external-identity"]
