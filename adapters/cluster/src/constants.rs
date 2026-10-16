@@ -1,6 +1,9 @@
 //! Cluster constants: defaults, protocol limits and the `AUTH_CLUSTER_*`,
 //! `AUTH_LINK_*`, `AUTH_FEDERATION_*` and `AUTH_FORK_*` environment
-//! variables read by [`ClusterEnvLoader`](crate::config::ClusterEnvLoader).
+//! variables read by [`ClusterEnvLoader`](crate::config::ClusterEnvLoader),
+//! and their paths in the `cluster` section of the configuration file.
+
+use z_auth::conf::config::Key;
 
 // ── Cluster ───────────────────────────────────────────────────────────────────
 
@@ -109,3 +112,60 @@ pub const ENV_FEDERATION_PURGE_HORIZON_SECS: &str = "AUTH_FEDERATION_PURGE_HORIZ
 pub const ENV_FORK_WINDOW_MS: &str = "AUTH_FORK_WINDOW_MS";
 pub const ENV_FORK_MAX_BENIGN: &str = "AUTH_FORK_MAX_BENIGN";
 pub const ENV_FORK_BUDGET_WINDOW_SECS: &str = "AUTH_FORK_BUDGET_WINDOW_SECS";
+
+// ── Configuration file (read by `config::ClusterSourceLoader`) ───────────────
+
+/// The cluster's top-level section in the configuration file.
+pub const SECTION: &str = "cluster";
+
+/// Every cluster setting: its environment variable and its path in the
+/// file.  The legacy aliases (`AUTH_CLUSTER_OFFLINE_AFTER`, …) have no path.
+pub const KEYS: &[Key] = &[
+    Key::new(ENV_DEPLOYMENT_MODE, "cluster.deployment_mode"),
+    Key::new(ENV_CLUSTER_SERVICE, "cluster.service"),
+    Key::new(ENV_CLUSTER_SECRET, "cluster.secret"),
+    Key::new(ENV_CLUSTER_ADVERTISE_IP, "cluster.advertise.ip"),
+    Key::new(ENV_CLUSTER_ADVERTISE_DNS, "cluster.advertise.dns"),
+    Key::new(ENV_CLUSTER_ADVERTISE_PORT, "cluster.advertise.port"),
+    Key::new(ENV_CLUSTER_HEARTBEAT_MS, "cluster.heartbeat_ms"),
+    Key::new(ENV_CLUSTER_WARNING_AFTER, "cluster.warning_after"),
+    Key::new(ENV_CLUSTER_MISSING_AFTER, "cluster.missing_after"),
+    Key::new(ENV_CLUSTER_RETIRED_TTL_SECS, "cluster.retired_ttl_secs"),
+    Key::new(ENV_CLUSTER_MAX_SKEW_SECS, "cluster.max_skew_secs"),
+    Key::new(ENV_CLUSTER_SELF_FENCE, "cluster.self_fence"),
+    Key::new(ENV_CLUSTER_SEEDS, "cluster.seeds"),
+    Key::new(ENV_LINK_RETRY_ATTEMPTS, "cluster.link.retry_attempts"),
+    Key::new(ENV_LINK_RETRY_BACKOFF_MS, "cluster.link.retry_backoff_ms"),
+    Key::new(ENV_LINK_BREAKER_FAILURES, "cluster.link.breaker_failures"),
+    Key::new(
+        ENV_LINK_BREAKER_COOLDOWN_SECS,
+        "cluster.link.breaker_cooldown_secs",
+    ),
+    Key::new(ENV_LINK_DEAD_REPROBE_SECS, "cluster.link.dead_reprobe_secs"),
+    Key::new(
+        ENV_AUTHORITY_SERVICE,
+        "cluster.federation.authority_service",
+    ),
+    Key::new(
+        ENV_SESSION_DISTRIBUTION,
+        "cluster.federation.session_distribution",
+    ),
+    Key::new(
+        ENV_FEDERATION_MAX_STALENESS_SECS,
+        "cluster.federation.max_staleness_secs",
+    ),
+    Key::new(
+        ENV_FEDERATION_PULL_PAGE_SIZE,
+        "cluster.federation.pull_page_size",
+    ),
+    Key::new(
+        ENV_FEDERATION_PURGE_HORIZON_SECS,
+        "cluster.federation.purge_horizon_secs",
+    ),
+    Key::new(ENV_FORK_WINDOW_MS, "cluster.federation.fork.window_ms"),
+    Key::new(ENV_FORK_MAX_BENIGN, "cluster.federation.fork.max_benign"),
+    Key::new(
+        ENV_FORK_BUDGET_WINDOW_SECS,
+        "cluster.federation.fork.budget_window_secs",
+    ),
+];

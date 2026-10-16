@@ -1,11 +1,18 @@
-//! Cluster configuration loaders: [`ClusterEnvLoader`] (environment) and
-//! [`ClusterDirectLoader`] (a pre-filled [`RawClusterConfig`]), plus the
-//! parsing and validation behind [`RawClusterConfig::build`].
+//! Cluster configuration loaders: [`ClusterEnvLoader`] (environment),
+//! [`ClusterSourceLoader`] (the `cluster` section of a YAML file and / or
+//! the environment) and [`ClusterDirectLoader`] (a pre-filled
+//! [`RawClusterConfig`]), plus the parsing and validation behind
+//! [`RawClusterConfig::build`].
 //!
 //! ```rust,no_run
-//! use z_auth_cluster::config::{ClusterConfigLoader, ClusterEnvLoader};
+//! use z_auth::conf::config::ConfigSource;
+//! use z_auth_cluster::config::{ClusterConfigLoader, ClusterEnvLoader, ClusterSourceLoader};
 //!
 //! let settings = ClusterEnvLoader.load_settings().expect("cluster config");
+//!
+//! // AUTH_CONFIG_FILE's `cluster` section, with the environment on top.
+//! let source = ConfigSource::standard().expect("config file");
+//! let settings = ClusterSourceLoader::new(source).load_settings().expect("cluster config");
 //! ```
 
 use std::time::Duration;
@@ -18,7 +25,7 @@ use crate::config::model::{
     RawClusterConfig, SeedAddress, SelfFence, SessionDistribution,
 };
 use crate::constants::*;
-use z_auth::conf::config::ConfigError;
+use z_auth::conf::config::{ConfigError, ConfigSource, Section, Setting};
 
 /// Any source of a [`RawClusterConfig`].
 pub trait ClusterConfigLoader: Send + Sync {
@@ -31,8 +38,21 @@ pub trait ClusterConfigLoader: Send + Sync {
 }
 
 /// Reads the cluster's environment variables.  Like z-auth's
-/// `EnvLoader`, it never loads a `.env` file itself.
+/// `EnvLoader`, it never loads a `.env` file itself.  Same as
+/// `ClusterSourceLoader::new(ConfigSource::env())`.
 pub struct ClusterEnvLoader;
+
+/// Reads the `cluster` section of a [`ConfigSource`]; the environment
+/// overrides the file.
+pub struct ClusterSourceLoader {
+    pub source: ConfigSource,
+}
+
+impl ClusterSourceLoader {
+    pub fn new(source: ConfigSource) -> Self {
+        Self { source }
+    }
+}
 
 /// A caller-supplied [`RawClusterConfig`].
 pub struct ClusterDirectLoader {
@@ -53,54 +73,73 @@ impl ClusterConfigLoader for ClusterDirectLoader {
 
 impl ClusterConfigLoader for ClusterEnvLoader {
     fn load(&self) -> Result<RawClusterConfig, ConfigError> {
+        ClusterSourceLoader::new(ConfigSource::env()).load()
+    }
+}
+
+impl ClusterConfigLoader for ClusterSourceLoader {
+    fn load(&self) -> Result<RawClusterConfig, ConfigError> {
+        let s = self.source.section(SECTION, KEYS, &[])?;
         Ok(RawClusterConfig {
-            cluster_service: env_str(ENV_CLUSTER_SERVICE),
-            cluster_advertise_ip: env_str(ENV_CLUSTER_ADVERTISE_IP),
-            cluster_advertise_dns: env_str(ENV_CLUSTER_ADVERTISE_DNS),
-            cluster_advertise_port: parse_opt(ENV_CLUSTER_ADVERTISE_PORT)?,
-            cluster_secret: env_str(ENV_CLUSTER_SECRET),
-            cluster_heartbeat_ms: parse_opt(ENV_CLUSTER_HEARTBEAT_MS)?,
-            cluster_offline_after: first_of(ENV_CLUSTER_WARNING_AFTER, ENV_CLUSTER_OFFLINE_AFTER)?,
-            cluster_remove_after: first_of(ENV_CLUSTER_MISSING_AFTER, ENV_CLUSTER_REMOVE_AFTER)?,
+            cluster_service: env_str(&s, ENV_CLUSTER_SERVICE),
+            cluster_advertise_ip: env_str(&s, ENV_CLUSTER_ADVERTISE_IP),
+            cluster_advertise_dns: env_str(&s, ENV_CLUSTER_ADVERTISE_DNS),
+            cluster_advertise_port: parse_opt(&s, ENV_CLUSTER_ADVERTISE_PORT)?,
+            cluster_secret: env_str(&s, ENV_CLUSTER_SECRET),
+            cluster_heartbeat_ms: parse_opt(&s, ENV_CLUSTER_HEARTBEAT_MS)?,
+            cluster_offline_after: first_of(
+                &s,
+                ENV_CLUSTER_WARNING_AFTER,
+                ENV_CLUSTER_OFFLINE_AFTER,
+            )?,
+            cluster_remove_after: first_of(
+                &s,
+                ENV_CLUSTER_MISSING_AFTER,
+                ENV_CLUSTER_REMOVE_AFTER,
+            )?,
             cluster_tombstone_secs: first_of(
+                &s,
                 ENV_CLUSTER_RETIRED_TTL_SECS,
                 ENV_CLUSTER_TOMBSTONE_SECS,
             )?,
-            cluster_max_skew_secs: parse_opt(ENV_CLUSTER_MAX_SKEW_SECS)?,
-            cluster_seeds: env_str(ENV_CLUSTER_SEEDS).map(|v| split_list(&v)),
-            cluster_self_fence: env_str(ENV_CLUSTER_SELF_FENCE),
-            link_retry_attempts: parse_opt(ENV_LINK_RETRY_ATTEMPTS)?,
-            link_retry_backoff_ms: parse_opt(ENV_LINK_RETRY_BACKOFF_MS)?,
-            link_breaker_failures: parse_opt(ENV_LINK_BREAKER_FAILURES)?,
-            link_breaker_cooldown_secs: parse_opt(ENV_LINK_BREAKER_COOLDOWN_SECS)?,
-            link_dead_reprobe_secs: parse_opt(ENV_LINK_DEAD_REPROBE_SECS)?,
-            deployment_mode: env_str(ENV_DEPLOYMENT_MODE),
-            authority_service: env_str(ENV_AUTHORITY_SERVICE),
-            session_distribution: env_str(ENV_SESSION_DISTRIBUTION),
-            federation_max_staleness_secs: parse_opt(ENV_FEDERATION_MAX_STALENESS_SECS)?,
-            federation_pull_page_size: parse_opt(ENV_FEDERATION_PULL_PAGE_SIZE)?,
-            federation_purge_horizon_secs: parse_opt(ENV_FEDERATION_PURGE_HORIZON_SECS)?,
-            fork_window_ms: parse_opt(ENV_FORK_WINDOW_MS)?,
-            fork_max_benign: parse_opt(ENV_FORK_MAX_BENIGN)?,
-            fork_budget_window_secs: parse_opt(ENV_FORK_BUDGET_WINDOW_SECS)?,
+            cluster_max_skew_secs: parse_opt(&s, ENV_CLUSTER_MAX_SKEW_SECS)?,
+            cluster_seeds: env_str(&s, ENV_CLUSTER_SEEDS).map(|v| split_list(&v)),
+            cluster_self_fence: env_str(&s, ENV_CLUSTER_SELF_FENCE),
+            link_retry_attempts: parse_opt(&s, ENV_LINK_RETRY_ATTEMPTS)?,
+            link_retry_backoff_ms: parse_opt(&s, ENV_LINK_RETRY_BACKOFF_MS)?,
+            link_breaker_failures: parse_opt(&s, ENV_LINK_BREAKER_FAILURES)?,
+            link_breaker_cooldown_secs: parse_opt(&s, ENV_LINK_BREAKER_COOLDOWN_SECS)?,
+            link_dead_reprobe_secs: parse_opt(&s, ENV_LINK_DEAD_REPROBE_SECS)?,
+            deployment_mode: env_str(&s, ENV_DEPLOYMENT_MODE),
+            authority_service: env_str(&s, ENV_AUTHORITY_SERVICE),
+            session_distribution: env_str(&s, ENV_SESSION_DISTRIBUTION),
+            federation_max_staleness_secs: parse_opt(&s, ENV_FEDERATION_MAX_STALENESS_SECS)?,
+            federation_pull_page_size: parse_opt(&s, ENV_FEDERATION_PULL_PAGE_SIZE)?,
+            federation_purge_horizon_secs: parse_opt(&s, ENV_FEDERATION_PURGE_HORIZON_SECS)?,
+            fork_window_ms: parse_opt(&s, ENV_FORK_WINDOW_MS)?,
+            fork_max_benign: parse_opt(&s, ENV_FORK_MAX_BENIGN)?,
+            fork_budget_window_secs: parse_opt(&s, ENV_FORK_BUDGET_WINDOW_SECS)?,
         })
     }
 }
 
-fn env_str(key: &str) -> Option<String> {
-    std::env::var(key).ok()
+fn env_str(s: &Section, key: &str) -> Option<String> {
+    s.get(key).map(|v| v.value)
 }
 
-/// The preferred variable if set, else its legacy alias.
-fn first_of<T>(preferred: &str, legacy: &str) -> Result<Option<T>, ConfigError>
+/// The preferred variable if set, else its legacy alias (environment only),
+/// else the preferred setting's path in the file.
+fn first_of<T>(s: &Section, preferred: &str, legacy: &str) -> Result<Option<T>, ConfigError>
 where
     T: std::str::FromStr,
     T::Err: std::fmt::Display,
 {
-    match parse_opt(preferred)? {
-        Some(v) => Ok(Some(v)),
-        None => parse_opt(legacy),
-    }
+    let env = s.source();
+    let setting = env
+        .get_env(preferred)
+        .or_else(|| env.get_env(legacy))
+        .or_else(|| s.get(preferred));
+    parse_setting(setting)
 }
 
 fn split_list(v: &str) -> Vec<String> {
@@ -110,17 +149,29 @@ fn split_list(v: &str) -> Vec<String> {
         .collect()
 }
 
-fn parse_opt<T>(key: &str) -> Result<Option<T>, ConfigError>
+fn parse_opt<T>(s: &Section, key: &str) -> Result<Option<T>, ConfigError>
 where
     T: std::str::FromStr,
     T::Err: std::fmt::Display,
 {
-    match std::env::var(key) {
-        Err(_) => Ok(None),
-        Ok(raw) => raw.parse::<T>().map(Some).map_err(|e| ConfigError::Parse {
-            key: key.into(),
-            reason: e.to_string(),
-        }),
+    parse_setting(s.get(key))
+}
+
+fn parse_setting<T>(setting: Option<Setting>) -> Result<Option<T>, ConfigError>
+where
+    T: std::str::FromStr,
+    T::Err: std::fmt::Display,
+{
+    match setting {
+        None => Ok(None),
+        Some(v) => v
+            .value
+            .parse::<T>()
+            .map(Some)
+            .map_err(|e| ConfigError::Parse {
+                key: v.origin,
+                reason: e.to_string(),
+            }),
     }
 }
 
