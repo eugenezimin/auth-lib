@@ -4,7 +4,7 @@ version = "0.3.0"
 edition = "2024"
 
 [workspace]
-members = ["adapters/postgres", "adapters/cluster", "testkit"]
+members = ["adapters/postgres", "adapters/cluster", "adapters/mfa", "testkit"]
 
 [features]
 default = ["argon2", "crypto", "serde"]

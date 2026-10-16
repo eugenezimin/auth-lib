@@ -53,6 +53,7 @@ struct State {
     /// (kind, key) → seq of the record's latest change
     feed: HashMap<(&'static str, String), u64>,
     seq: u64,
+    #[cfg(feature = "federation")]
     site_id: Option<Uuid>,
     /// session id → revision, bumped by every session write
     session_revs: HashMap<Uuid, u64>,
@@ -65,10 +66,16 @@ struct State {
     catalog_snapshot: Option<z_auth_cluster::federation::CatalogSnapshot>,
     #[cfg(feature = "federation")]
     cursors: HashMap<z_auth_cluster::federation::SiteId, z_auth_cluster::federation::FeedCursor>,
+    #[cfg(feature = "federation")]
     caught_up: HashMap<String, DateTime<Utc>>,
+    #[cfg(feature = "federation")]
     versions: u64,
     /// Records applied from other clusters (for "no ping-pong" checks).
+    #[cfg(feature = "federation")]
     applied: usize,
+    // ── z-auth-mfa ──────────────────────────────────────────────────────
+    #[cfg(feature = "mfa")]
+    mfa: mfa_store::MfaState,
 }
 
 const FEED_SESSION: &str = "session";
@@ -327,6 +334,8 @@ impl UserRepository for InMemoryDb {
             s.sessions.remove(&id);
             s.generations.remove(&id);
         }
+        #[cfg(feature = "mfa")]
+        s.mfa.remove_user(user_id);
         Ok(Some(user_id))
     }
     async fn activate(&self, user_id: Uuid) -> Result<bool, AuthError> {
@@ -1648,6 +1657,480 @@ mod sync_store {
 
         async fn caught_up_at(&self, service: &str) -> Result<Option<DateTime<Utc>>, AuthError> {
             Ok(self.lock().caught_up.get(service).copied())
+        }
+    }
+}
+
+#[cfg(feature = "mfa")]
+mod mfa_store {
+    use super::*;
+    use z_auth_mfa::model::{
+        Challenge, ChallengeCode, Factor, FactorStatus, LockState, NewChallenge, NewCode,
+        NewFactor, PendingCode, SendOutcome,
+    };
+    use z_auth_mfa::repository::{CodeLimits, MfaRepository};
+
+    struct RecoveryRow {
+        user_id: Uuid,
+        hash: [u8; 32],
+        used: bool,
+    }
+
+    struct LockRow {
+        failures: u32,
+        window_started_at: DateTime<Utc>,
+        locked_until: Option<DateTime<Utc>>,
+    }
+
+    #[derive(Default)]
+    pub(super) struct MfaState {
+        factors: HashMap<Uuid, Factor>,
+        recovery: Vec<RecoveryRow>,
+        challenges: HashMap<Uuid, Challenge>,
+        locks: HashMap<Uuid, LockRow>,
+    }
+
+    impl MfaState {
+        /// Like `ON DELETE CASCADE` from the user.
+        pub(super) fn remove_user(&mut self, user_id: Uuid) -> u64 {
+            let before = self.factors.len();
+            self.factors.retain(|_, f| f.user_id != user_id);
+            self.recovery.retain(|r| r.user_id != user_id);
+            self.challenges.retain(|_, c| c.user_id != user_id);
+            self.locks.remove(&user_id);
+            (before - self.factors.len()) as u64
+        }
+    }
+
+    /// Store a new code in `slot` within `limits`.
+    fn store_code(
+        slot: Option<PendingCode>,
+        code_hash: [u8; 32],
+        limits: CodeLimits,
+        now: DateTime<Utc>,
+    ) -> Result<PendingCode, SendOutcome> {
+        let sends = match &slot {
+            Some(c) if c.sent_at + limits.resend_after > now => return Err(SendOutcome::TooSoon),
+            Some(c) if c.expires_at > now => {
+                if c.sends >= limits.max_sends {
+                    return Err(SendOutcome::LimitReached);
+                }
+                c.sends + 1
+            }
+            _ => 1,
+        };
+        Ok(PendingCode {
+            code_hash,
+            expires_at: now + limits.ttl,
+            sent_at: now,
+            sends,
+            attempts: 0,
+        })
+    }
+
+    impl InMemoryDb {
+        /// Every stored factor (test inspection).
+        pub fn mfa_factors(&self) -> Vec<Factor> {
+            self.lock().mfa.factors.values().cloned().collect()
+        }
+
+        /// Every stored challenge (test inspection).
+        pub fn mfa_challenges(&self) -> Vec<Challenge> {
+            self.lock().mfa.challenges.values().cloned().collect()
+        }
+    }
+
+    #[async_trait]
+    impl MfaRepository for InMemoryDb {
+        async fn list_factors(&self, user_id: Uuid) -> Result<Vec<Factor>, AuthError> {
+            let mut factors: Vec<Factor> = self
+                .lock()
+                .mfa
+                .factors
+                .values()
+                .filter(|f| f.user_id == user_id)
+                .cloned()
+                .collect();
+            factors.sort_by_key(|f| (f.created_at, f.id));
+            Ok(factors)
+        }
+
+        async fn find_factor(
+            &self,
+            factor_id: Uuid,
+        ) -> Result<Option<(Factor, DateTime<Utc>)>, AuthError> {
+            let now = self.now();
+            Ok(self
+                .lock()
+                .mfa
+                .factors
+                .get(&factor_id)
+                .cloned()
+                .map(|f| (f, now)))
+        }
+
+        async fn insert_pending_factor(
+            &self,
+            factor: NewFactor,
+            ttl: Duration,
+        ) -> Result<Factor, AuthError> {
+            let now = self.now();
+            let stored = Factor {
+                id: factor.id,
+                user_id: factor.user_id,
+                method: factor.method,
+                status: FactorStatus::Pending,
+                label: factor.label,
+                secret_sealed: factor.secret_sealed,
+                totp: factor.totp,
+                last_used_step: None,
+                destination_sealed: factor.destination_sealed,
+                destination_hint: factor.destination_hint,
+                code: None,
+                created_at: now,
+                expires_at: Some(now + ttl),
+                confirmed_at: None,
+                last_used_at: None,
+            };
+            let mut s = self.lock();
+            s.mfa.factors.retain(|_, f| {
+                !(f.user_id == stored.user_id
+                    && f.method == stored.method
+                    && f.status == FactorStatus::Pending)
+            });
+            s.mfa.factors.insert(stored.id, stored.clone());
+            Ok(stored)
+        }
+
+        async fn activate_factor(
+            &self,
+            factor_id: Uuid,
+            user_id: Uuid,
+            used_step: Option<u64>,
+        ) -> Result<bool, AuthError> {
+            let now = self.now();
+            let mut s = self.lock();
+            let Some(method) = s
+                .mfa
+                .factors
+                .get(&factor_id)
+                .filter(|f| {
+                    f.user_id == user_id
+                        && f.status == FactorStatus::Pending
+                        && f.expires_at.is_some_and(|t| t > now)
+                })
+                .map(|f| f.method)
+            else {
+                return Ok(false);
+            };
+            let taken = s.mfa.factors.values().any(|f| {
+                f.user_id == user_id && f.method == method && f.status == FactorStatus::Active
+            });
+            if taken {
+                return Err(AuthError::SecondFactorAlreadyEnrolled);
+            }
+            let f = s.mfa.factors.get_mut(&factor_id).expect("checked above");
+            f.status = FactorStatus::Active;
+            f.confirmed_at = Some(now);
+            f.expires_at = None;
+            f.code = None;
+            f.last_used_step = used_step;
+            Ok(true)
+        }
+
+        async fn delete_factor(&self, factor_id: Uuid, user_id: Uuid) -> Result<bool, AuthError> {
+            let mut s = self.lock();
+            let owned = s
+                .mfa
+                .factors
+                .get(&factor_id)
+                .is_some_and(|f| f.user_id == user_id);
+            if owned {
+                s.mfa.factors.remove(&factor_id);
+            }
+            Ok(owned)
+        }
+
+        async fn advance_totp_step(&self, factor_id: Uuid, step: u64) -> Result<bool, AuthError> {
+            let now = self.now();
+            let mut s = self.lock();
+            match s.mfa.factors.get_mut(&factor_id) {
+                Some(f) if f.last_used_step.is_none_or(|last| last < step) => {
+                    f.last_used_step = Some(step);
+                    f.last_used_at = Some(now);
+                    Ok(true)
+                }
+                _ => Ok(false),
+            }
+        }
+
+        async fn mark_factor_used(&self, factor_id: Uuid) -> Result<(), AuthError> {
+            let now = self.now();
+            if let Some(f) = self.lock().mfa.factors.get_mut(&factor_id) {
+                f.last_used_at = Some(now);
+                f.code = None;
+            }
+            Ok(())
+        }
+
+        async fn set_factor_code(
+            &self,
+            factor_id: Uuid,
+            code_hash: [u8; 32],
+            limits: CodeLimits,
+        ) -> Result<SendOutcome, AuthError> {
+            let now = self.now();
+            let mut s = self.lock();
+            let Some(f) = s.mfa.factors.get_mut(&factor_id).filter(|f| {
+                f.status == FactorStatus::Active || f.expires_at.is_some_and(|t| t > now)
+            }) else {
+                return Ok(SendOutcome::NotFound);
+            };
+            match store_code(f.code.clone(), code_hash, limits, now) {
+                Ok(code) => {
+                    let expires_at = code.expires_at;
+                    f.code = Some(code);
+                    Ok(SendOutcome::Stored { expires_at })
+                }
+                Err(outcome) => Ok(outcome),
+            }
+        }
+
+        async fn record_factor_attempt(
+            &self,
+            factor_id: Uuid,
+            max: u32,
+        ) -> Result<Option<u32>, AuthError> {
+            let now = self.now();
+            let mut s = self.lock();
+            let code = s
+                .mfa
+                .factors
+                .get_mut(&factor_id)
+                .and_then(|f| f.code.as_mut())
+                .filter(|c| c.expires_at > now && c.attempts < max);
+            Ok(code.map(|c| {
+                c.attempts += 1;
+                c.attempts
+            }))
+        }
+
+        async fn replace_recovery_codes(
+            &self,
+            user_id: Uuid,
+            code_hashes: &[[u8; 32]],
+        ) -> Result<(), AuthError> {
+            let mut s = self.lock();
+            s.mfa.recovery.retain(|r| r.user_id != user_id);
+            s.mfa
+                .recovery
+                .extend(code_hashes.iter().map(|hash| RecoveryRow {
+                    user_id,
+                    hash: *hash,
+                    used: false,
+                }));
+            Ok(())
+        }
+
+        async fn consume_recovery_code(
+            &self,
+            user_id: Uuid,
+            code_hash: &[u8; 32],
+        ) -> Result<bool, AuthError> {
+            let mut s = self.lock();
+            match s
+                .mfa
+                .recovery
+                .iter_mut()
+                .find(|r| r.user_id == user_id && !r.used && r.hash == *code_hash)
+            {
+                Some(row) => {
+                    row.used = true;
+                    Ok(true)
+                }
+                None => Ok(false),
+            }
+        }
+
+        async fn count_recovery_codes(&self, user_id: Uuid) -> Result<u32, AuthError> {
+            Ok(self
+                .lock()
+                .mfa
+                .recovery
+                .iter()
+                .filter(|r| r.user_id == user_id && !r.used)
+                .count() as u32)
+        }
+
+        async fn create_challenge(
+            &self,
+            challenge: NewChallenge,
+            ttl: Duration,
+        ) -> Result<Challenge, AuthError> {
+            let now = self.now();
+            let stored = Challenge {
+                id: challenge.id,
+                user_id: challenge.user_id,
+                secret_hash: challenge.secret_hash,
+                created_ip: challenge.created_ip,
+                user_agent: challenge.user_agent,
+                fingerprint_hash: challenge.fingerprint_hash,
+                attempts: 0,
+                created_at: now,
+                expires_at: now + ttl,
+                consumed_at: None,
+                code: None,
+            };
+            self.lock().mfa.challenges.insert(stored.id, stored.clone());
+            Ok(stored)
+        }
+
+        async fn find_challenge(
+            &self,
+            challenge_id: Uuid,
+        ) -> Result<Option<(Challenge, DateTime<Utc>)>, AuthError> {
+            let now = self.now();
+            Ok(self
+                .lock()
+                .mfa
+                .challenges
+                .get(&challenge_id)
+                .cloned()
+                .map(|c| (c, now)))
+        }
+
+        async fn record_challenge_attempt(
+            &self,
+            challenge_id: Uuid,
+            max: u32,
+        ) -> Result<Option<u32>, AuthError> {
+            let now = self.now();
+            let mut s = self.lock();
+            let challenge = s
+                .mfa
+                .challenges
+                .get_mut(&challenge_id)
+                .filter(|c| c.consumed_at.is_none() && c.expires_at > now && c.attempts < max);
+            Ok(challenge.map(|c| {
+                c.attempts += 1;
+                c.attempts
+            }))
+        }
+
+        async fn set_challenge_code(
+            &self,
+            challenge_id: Uuid,
+            code: NewCode,
+            limits: CodeLimits,
+        ) -> Result<SendOutcome, AuthError> {
+            let now = self.now();
+            let mut s = self.lock();
+            let Some(c) = s
+                .mfa
+                .challenges
+                .get_mut(&challenge_id)
+                .filter(|c| c.consumed_at.is_none() && c.expires_at > now)
+            else {
+                return Ok(SendOutcome::NotFound);
+            };
+            let previous = c.code.as_ref().map(|cc| cc.code.clone());
+            match store_code(previous, code.code_hash, limits, now) {
+                Ok(pending) => {
+                    let expires_at = pending.expires_at;
+                    c.code = Some(ChallengeCode {
+                        factor_id: code.factor_id,
+                        code: pending,
+                    });
+                    Ok(SendOutcome::Stored { expires_at })
+                }
+                Err(outcome) => Ok(outcome),
+            }
+        }
+
+        async fn consume_challenge(&self, challenge_id: Uuid) -> Result<bool, AuthError> {
+            let now = self.now();
+            let mut s = self.lock();
+            match s
+                .mfa
+                .challenges
+                .get_mut(&challenge_id)
+                .filter(|c| c.consumed_at.is_none() && c.expires_at > now)
+            {
+                Some(c) => {
+                    c.consumed_at = Some(now);
+                    Ok(true)
+                }
+                None => Ok(false),
+            }
+        }
+
+        async fn lock_state(&self, user_id: Uuid) -> Result<LockState, AuthError> {
+            let now = self.now();
+            let s = self.lock();
+            let row = s.mfa.locks.get(&user_id);
+            Ok(LockState {
+                failures: row.map_or(0, |r| r.failures),
+                locked_until: row.and_then(|r| r.locked_until),
+                now,
+            })
+        }
+
+        async fn record_failure(
+            &self,
+            user_id: Uuid,
+            window: Duration,
+            threshold: u32,
+            lock_for: Duration,
+        ) -> Result<LockState, AuthError> {
+            let now = self.now();
+            let mut s = self.lock();
+            let row = s.mfa.locks.entry(user_id).or_insert(LockRow {
+                failures: 0,
+                window_started_at: now,
+                locked_until: None,
+            });
+            if row.window_started_at + window <= now {
+                row.failures = 0;
+                row.window_started_at = now;
+            }
+            row.failures += 1;
+            if threshold > 0 && row.failures >= threshold {
+                row.locked_until = Some(now + lock_for);
+                row.failures = 0;
+                row.window_started_at = now;
+            }
+            Ok(LockState {
+                failures: row.failures,
+                locked_until: row.locked_until,
+                now,
+            })
+        }
+
+        async fn clear_failures(&self, user_id: Uuid) -> Result<(), AuthError> {
+            self.lock().mfa.locks.remove(&user_id);
+            Ok(())
+        }
+
+        async fn delete_all(&self, user_id: Uuid) -> Result<u64, AuthError> {
+            Ok(self.lock().mfa.remove_user(user_id))
+        }
+
+        async fn purge(&self, retention: Duration) -> Result<u64, AuthError> {
+            let now = self.now();
+            let cutoff = now - retention;
+            let mut s = self.lock();
+            let before = s.mfa.challenges.len() + s.mfa.factors.len() + s.mfa.locks.len();
+            s.mfa
+                .challenges
+                .retain(|_, c| c.expires_at >= cutoff && c.consumed_at.is_none_or(|t| t >= cutoff));
+            s.mfa.factors.retain(|_, f| {
+                f.status == FactorStatus::Active || f.expires_at.is_some_and(|t| t >= cutoff)
+            });
+            s.mfa.locks.retain(|_, l| {
+                l.locked_until.is_some_and(|t| t > now) || l.window_started_at >= cutoff
+            });
+            let after = s.mfa.challenges.len() + s.mfa.factors.len() + s.mfa.locks.len();
+            Ok((before - after) as u64)
         }
     }
 }

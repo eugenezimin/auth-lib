@@ -10,10 +10,13 @@ default = []
 # In-memory cluster ports (node registry, federation sync store).
 shared = ["dep:z-auth-cluster", "z-auth-cluster/shared"]
 federation = ["shared", "z-auth-cluster/federation"]
+# In-memory z-auth-mfa store.
+mfa = ["dep:z-auth-mfa"]
 
 [dependencies]
 z-auth         = { path = "..", features = ["argon2", "crypto", "serde"] }
 z-auth-cluster = { path = "../adapters/cluster", default-features = false, optional = true }
+z-auth-mfa     = { path = "../adapters/mfa", optional = true }
 async-trait      = "0.1.89"
 chrono           = { version = "0.4", default-features = false, features = ["clock", "std"] }
 uuid             = { version = "1", features = ["v4"] }

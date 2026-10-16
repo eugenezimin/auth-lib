@@ -2,9 +2,12 @@
 //! z-auth-cluster): a mock clock, test configuration, an in-memory store
 //! implementing every repository port, and request helpers.
 //!
-//! Features `shared` / `federation` add the in-memory cluster ports.
+//! Features `shared` / `federation` add the in-memory cluster ports;
+//! feature `mfa` the in-memory z-auth-mfa store and its helpers ([`mfa`]).
 
 pub mod in_memory;
+#[cfg(feature = "mfa")]
+pub mod mfa;
 
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::{Arc, Mutex};
