@@ -5,7 +5,7 @@
 Supported factors:
 
 - **TOTP**: authenticator apps (RFC 6238; SHA-1, SHA-256 or SHA-512; 6–8 digits).
-- **Email and SMS codes**: z-auth-mfa generates and checks them, and the host's `CodeSender` delivers them.
+- **Email and SMS codes**: z-auth-mfa generates and checks them, and the host's `CodeSender` delivers them. [z-auth-mfa-delivery](../mfa-delivery/README.md) provides senders for SMTP, SendGrid, Postmark, Mailgun, Twilio and a signed webhook.
 - **Recovery codes**: issued with a user's first factor, each usable once.
 
 ## Wiring
@@ -20,7 +20,7 @@ let mfa = Arc::new(
         MfaEnvLoader.load_settings()?,                        // AUTH_MFA_*
         Arc::new(z_auth_postgres::PgMfaRepository::new(pool.clone())), // feature `mfa`
     )
-    .with_code_sender(Arc::new(my_mailer)),                   // with email / sms only
+    .with_code_sender(Arc::new(my_mailer)),                   // with email / sms only; see z-auth-mfa-delivery
 );
 let auth = ZAuth::builder(EnvLoader.load_config()?, repos)
     .extension(mfa.clone())

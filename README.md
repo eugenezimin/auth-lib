@@ -15,6 +15,7 @@ z-auth defines the auth domain (users, roles, permissions, sessions, tokens) and
 | `z-auth` | `.` | The core: registration, login, sessions, Ed25519 access tokens, HMAC refresh tokens, revocation, RBAC and permissions, and the `ZAuth` facade |
 | `z-auth-cluster` | [`adapters/cluster`](adapters/cluster/README.md) | Optional clustering as a z-auth `Extension`: shared mode (one database) and federation mode (database per service) |
 | `z-auth-mfa` | [`adapters/mfa`](adapters/mfa/README.md) | Optional two-factor authentication as a z-auth `Extension`: TOTP, email / SMS codes and recovery codes, configured through `AUTH_MFA_*` |
+| `z-auth-mfa-delivery` | [`adapters/mfa-delivery`](adapters/mfa-delivery/README.md) | Delivery of z-auth-mfa's email / SMS codes: SMTP, SendGrid, Postmark, Mailgun, Twilio or a signed webhook, chosen through `AUTH_MFA_*_PROVIDER` |
 | `z-auth-postgres` | [`adapters/postgres`](adapters/postgres/README.md) | Reference PostgreSQL adapter (sqlx) with migrations and the `setup_db` binary, including the cluster and mfa stores behind features |
 | `z-auth-testkit` | `testkit` | In-memory adapters and helpers for the test suites (not published) |
 
