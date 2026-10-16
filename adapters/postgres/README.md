@@ -1,429 +1,359 @@
-# z-auth-postgres — reference PostgreSQL adapter
+# z-auth-postgres
 
-Implements every `z-auth` repository port on top of `sqlx` / PostgreSQL. The core `z-auth` crate never depends on this crate. A host application either uses this adapter or writes its own against the same traits.
+`z-auth-postgres` is the reference PostgreSQL adapter for z-auth. It implements every storage port that the core `z-auth` crate and its optional extensions `z-auth-cluster` and `z-auth-mfa` define, using `sqlx` 0.8 with the Tokio runtime. The dependency points one way only. The core crate never depends on this adapter, so a host application can use it as is, copy and adapt it, or write its own adapter against the same traits; nothing in z-auth assumes PostgreSQL.
 
-The core ports are `PgUserRepository`, `PgRoleRepository`, `PgUserRoleRepository`, `PgSessionRepository`, `PgRevocationRepository`, `PgPermissionRepository` and `PgKeyRepository`, one for each z-auth repository trait.
+The crate ships four things. It provides repository types (`PgUserRepository`, `PgSessionRepository` and the rest) that turn the port calls into SQL, a connection-pool helper that reads `DB_*` environment variables, four embedded migration sets that build the schema, and the `setup_db` binary that creates and upgrades a development database. The guides in [`docs/`](docs/) describe the schema, the migrations, the federation storage and the query internals in depth; this page is the starting point.
 
-The ports of the optional `z-auth-cluster` crate sit behind features. `PgNodeRepository` (its `NodeRepository`) needs feature `shared`, and `PgSyncStore` (its `SyncStore`) needs feature `federation`. `PgMfaRepository`, the store of the optional `z-auth-mfa` crate, needs feature `mfa`.
+## Public API
 
----
+Everything a host needs is re-exported from the crate root, except `connect_options` (in the public `pool` module) and the constants (in the public `constants` module). Items behind a feature only exist when that feature is enabled.
 
-## Wiring it into z-auth
+| Item | Kind | Feature | Purpose |
+|---|---|---|---|
+| `repositories(&pool)` | function | none | Returns a `z_auth::Repositories` holding `PgUserRepository`, `PgRoleRepository`, `PgUserRoleRepository`, `PgSessionRepository`, `PgRevocationRepository` and `PgKeyRepository`, all on clones of one pool |
+| `PgConfig` | struct | none | Connection settings with public fields, read by `PgConfig::from_env()`; `connection_url()` and `connection_url_for(db)` render a URL, and `Debug` redacts the password |
+| `build_pg_pool(&PgConfig)` | async function | none | Builds a `sqlx::PgPool` with the configured size and acquire timeout, every connection pinned to UTC |
+| `pool::connect_options(url)` | function | none | Parses a URL into `PgConnectOptions` and adds the `timezone=UTC` startup option, for hosts that build their own pool |
+| `constants` | module | none | Connection defaults, the `DB_*` variable names and the constraint names that map to domain errors |
+| `MIGRATOR`, `run_migrations(&pool)` | static, async function | none | The core set in `migrations/` (`identity_` and `security_` tables) |
+| `CLUSTER_MIGRATOR`, `run_cluster_migrations(&pool)` | static, async function | `shared` | The cluster set in `migrations_cluster/`; the function applies the core set first |
+| `SESSION_STORE_MIGRATOR`, `run_session_store_migrations(&pool)` | static, async function | `federation` | The self-contained session-store schema in `migrations_session_store/` for non-authority services |
+| `MFA_MIGRATOR`, `run_mfa_migrations(&pool)` | static, async function | `mfa` | The mfa set in `migrations_mfa/`; the function applies the core set first |
+
+The repository types each wrap a `PgPool` and are built with `new(pool)`. Every one of them implements exactly one port.
+
+| Type | Port | Defined in | Feature |
+|---|---|---|---|
+| `PgUserRepository` | `UserRepository` | `z_auth::identity::user` | none |
+| `PgRoleRepository` | `RoleRepository` | `z_auth::identity::access` | none |
+| `PgUserRoleRepository` | `UserRoleRepository` | `z_auth::identity::access` | none |
+| `PgSessionRepository` | `SessionRepository` | `z_auth::security::session` | none |
+| `PgRevocationRepository` | `RevocationRepository` | `z_auth::security::token` | none |
+| `PgKeyRepository` | `KeyRepository` | `z_auth::security::token` | none |
+| `PgPermissionRepository` | `PermissionRepository` | `z_auth::security::authorization` | none |
+| `PgNodeRepository` | `NodeRepository` | `z_auth_cluster::shared` | `shared` |
+| `PgSyncStore` | `SyncStore` | `z_auth_cluster::federation` | `federation` |
+| `PgMfaRepository` | `MfaRepository` | `z_auth_mfa::repository` | `mfa` |
+
+`PgPermissionRepository` is not part of `repositories(&pool)` because the core treats it as optional. It is passed to the builder with `.permissions(...)` and is required when `AUTH_AUTHZ_MODE` is `permissions` or `combined`. `PgSyncStore` also has an inherent `next_account_version()` method that draws the next account-snapshot version on the authority.
+
+## Features
+
+No feature is enabled by default, and the default build depends only on `z-auth`, `sqlx`, `tokio`, `chrono`, `uuid`, `serde_json` and `async-trait`. Each feature pulls in one optional crate and adds the matching repository and migration set.
+
+| Feature | Enables | Adds |
+|---|---|---|
+| `shared` | `z-auth-cluster` with its `shared` feature | `PgNodeRepository`, `CLUSTER_MIGRATOR`, `run_cluster_migrations` |
+| `federation` | `shared` plus `z-auth-cluster/federation` | `PgSyncStore`, `SESSION_STORE_MIGRATOR`, `run_session_store_migrations` |
+| `mfa` | `z-auth-mfa` with `default-features = false` | `PgMfaRepository`, `MFA_MIGRATOR`, `run_mfa_migrations` |
+
+A host that runs a federated authority with two-factor authentication would therefore declare the dependency as follows.
+
+```toml
+[dependencies]
+z-auth-postgres = { path = "adapters/postgres", features = ["federation", "mfa"] }
+```
+
+## How the ports map to tables
+
+Each port is served by one type, and each type touches one group of tables. The diagram reads from left to right, from the trait z-auth calls to the tables that end up holding the data.
+
+```mermaid
+flowchart LR
+    subgraph core["z-auth ports"]
+        U[UserRepository]
+        R[RoleRepository]
+        UR[UserRoleRepository]
+        P[PermissionRepository]
+        S[SessionRepository]
+        RV[RevocationRepository]
+        K[KeyRepository]
+    end
+    subgraph ext["extension ports"]
+        N["NodeRepository (cluster)"]
+        SY["SyncStore (cluster)"]
+        M["MfaRepository (mfa)"]
+    end
+    U --> PgU[PgUserRepository]
+    R --> PgR[PgRoleRepository]
+    UR --> PgUR[PgUserRoleRepository]
+    P --> PgP[PgPermissionRepository]
+    S --> PgS[PgSessionRepository]
+    RV --> PgRV[PgRevocationRepository]
+    K --> PgK[PgKeyRepository]
+    N --> PgN[PgNodeRepository]
+    SY --> PgSY[PgSyncStore]
+    M --> PgM[PgMfaRepository]
+    PgU --> TI["identity_users"]
+    PgR --> TR["identity_roles"]
+    PgUR --> TRA["identity_role_assignments"]
+    PgP --> TP["security_permissions, options, grants"]
+    PgS --> TS["security_sessions, generations, fork aliases"]
+    PgRV --> TRV["security_token_revocations"]
+    PgK --> TK["security_verifying_keys"]
+    PgN --> TN["cluster_nodes"]
+    PgSY --> TF["cluster_ snapshots, feed, cursors, freshness"]
+    PgSY --> TS
+    PgSY --> TRV
+    PgSY --> TK
+    PgM --> TM["mfa_ tables"]
+```
+
+`PgSyncStore` is the only type that writes across groups. It reads and replaces whole session aggregates, merges revocations and keys arriving from other clusters, and maintains the `cluster_` federation tables; [federation storage](docs/federation.md) explains how.
+
+## Wiring
+
+The examples below are written as functions returning `Box<dyn std::error::Error>`, which accepts every error type involved (`PgConfig::from_env` returns a `String`, the pool a `sqlx::Error`, the migrators a `MigrateError`, the loaders a `ConfigError` and the builder an `AuthError`). The calls themselves are taken from the crate's source and tests.
+
+### Core
+
+A standalone deployment needs one pool, the core migrations and `repositories(&pool)`. The permission repository is added because permission modes need it; in `none` and `rbac` modes it can be left out.
 
 ```rust
 use std::sync::Arc;
-use z_auth::{ZAuth, conf::config::{ConfigLoader, EnvLoader}};
-use z_auth_postgres::*;
 
-let pool = build_pg_pool(&PgConfig::from_env()?).await?;
-run_migrations(&pool).await?;   // apply any pending schema migrations
-// `repositories(&pool)` supplies every required repository (users, roles,
-// user_roles, sessions, revocations, keys); a missing one is a compile error.
-let auth = ZAuth::builder(EnvLoader.load_config()?, repositories(&pool))
-    .permissions(Arc::new(PgPermissionRepository::new(pool.clone()))) // AUTH_AUTHZ_MODE=permissions|combined
-    .build()?;
+use z_auth::ZAuth;
+use z_auth::conf::config::{ConfigLoader, EnvLoader};
+use z_auth_postgres::{
+    PgConfig, PgPermissionRepository, build_pg_pool, repositories, run_migrations,
+};
 
-// Load revocations / keys / catalog; then call auth.tick() periodically.
-auth.start().await?;
+async fn build_auth() -> Result<ZAuth, Box<dyn std::error::Error>> {
+    let pool = build_pg_pool(&PgConfig::from_env()?).await?;
+    run_migrations(&pool).await?;
+    let auth = ZAuth::builder(EnvLoader.load_config()?, repositories(&pool))
+        .permissions(Arc::new(PgPermissionRepository::new(pool.clone())))
+        .build()?;
+    auth.start().await?; // loads revocations, keys and the catalog
+    Ok(auth)
+}
 ```
 
-With a cluster, enable feature `shared` here and add the `z-auth-cluster` crate to the service application.
+After `start`, the host calls `auth.tick()` periodically so that pending revocations are enforced and expired denylist entries are dropped.
+
+### Shared cluster
+
+A shared cluster runs several instances of one service on one database. Enable the `shared` feature, apply the cluster set (which applies the core set first) and hand a `PgNodeRepository` to `SharedCluster`. The transport is the host's own network client implementing `ClusterTransport`, so it appears here as a parameter.
 
 ```rust
-use z_auth_cluster::{SharedCluster, config::{ClusterConfigLoader, ClusterEnvLoader}};
+use std::sync::Arc;
 
-run_cluster_migrations(&pool).await?;   // core, then the cluster tables
-let cluster = Arc::new(SharedCluster::new(
-    ClusterEnvLoader.load_settings()?,
-    transport,
-    Arc::new(PgNodeRepository::new(pool.clone())),
-));
-let auth = ZAuth::builder(EnvLoader.load_config()?, repositories(&pool))
-    .extension(cluster.clone())
-    .build()?;
-auth.start().await?;   // joins the cluster; then auth.tick() every heartbeat
-// inbound cluster endpoint: cluster.receive(envelope).await?
+use z_auth::ZAuth;
+use z_auth::conf::config::{ConfigLoader, EnvLoader};
+use z_auth_cluster::SharedCluster;
+use z_auth_cluster::config::{ClusterConfigLoader, ClusterEnvLoader};
+use z_auth_cluster::shared::ClusterTransport;
+use z_auth_postgres::{
+    PgConfig, PgNodeRepository, build_pg_pool, repositories, run_cluster_migrations,
+};
+
+async fn build_clustered(
+    transport: Arc<dyn ClusterTransport>,
+) -> Result<(ZAuth, Arc<SharedCluster>), Box<dyn std::error::Error>> {
+    let pool = build_pg_pool(&PgConfig::from_env()?).await?;
+    run_cluster_migrations(&pool).await?; // core, then cluster
+    let cluster = Arc::new(SharedCluster::new(
+        ClusterEnvLoader.load_settings()?,
+        transport,
+        Arc::new(PgNodeRepository::new(pool.clone())),
+    ));
+    let auth = ZAuth::builder(EnvLoader.load_config()?, repositories(&pool))
+        .extension(cluster.clone())
+        .build()?;
+    auth.start().await?; // joins the cluster
+    Ok((auth, cluster))
+}
 ```
 
-With two-factor authentication, enable feature `mfa` here and add the `z-auth-mfa` crate to the service application.
+The host routes inbound cluster envelopes to `cluster.receive(envelope)` and calls `auth.tick()` every heartbeat. Federation, where each service has its own database, is wired differently and is covered in [federation storage](docs/federation.md).
+
+### Two-factor authentication
+
+With the `mfa` feature, `run_mfa_migrations` applies the core set and then the `mfa_` tables, and `PgMfaRepository` is handed to the `Mfa` extension. A code sender is only needed when email or SMS factors are enabled; `mailer` below stands for the host's implementation of `z_auth_mfa::CodeSender`.
 
 ```rust
-use z_auth_mfa::{Mfa, config::{MfaConfigLoader, MfaEnvLoader}};
+use std::sync::Arc;
 
-run_mfa_migrations(&pool).await?;   // core, then the mfa tables
-let mfa = Arc::new(
-    Mfa::new(MfaEnvLoader.load_settings()?, Arc::new(PgMfaRepository::new(pool.clone())))
-        .with_code_sender(Arc::new(mailer)),   // only with AUTH_MFA_METHODS email / sms
-);
-let auth = ZAuth::builder(EnvLoader.load_config()?, repositories(&pool))
-    .extension(mfa.clone())
-    .build()?;
+use z_auth::ZAuth;
+use z_auth::conf::config::{ConfigLoader, EnvLoader};
+use z_auth_mfa::{CodeSender, Mfa};
+use z_auth_mfa::config::{MfaConfigLoader, MfaEnvLoader};
+use z_auth_postgres::{
+    PgConfig, PgMfaRepository, build_pg_pool, repositories, run_mfa_migrations,
+};
+
+async fn build_with_mfa(
+    mailer: Arc<dyn CodeSender>,
+) -> Result<ZAuth, Box<dyn std::error::Error>> {
+    let pool = build_pg_pool(&PgConfig::from_env()?).await?;
+    run_mfa_migrations(&pool).await?; // core, then mfa
+    let mfa = Arc::new(
+        Mfa::new(MfaEnvLoader.load_settings()?, Arc::new(PgMfaRepository::new(pool.clone())))
+            .with_code_sender(mailer),
+    );
+    let auth = ZAuth::builder(EnvLoader.load_config()?, repositories(&pool))
+        .extension(mfa)
+        .build()?;
+    auth.start().await?;
+    Ok(auth)
+}
 ```
 
-## Schema conventions
-
-- Every table starts with the layer that owns it, `identity_` (users, roles), `security_` (permissions, sessions, tokens) and, for the optional crates, `cluster_` (z-auth-cluster: instances and the federation change feed) and `mfa_` (z-auth-mfa: second factors). Constraints, indexes, sequences and triggers embed their table's name.
-- Tables have a surrogate `id uuid` primary key generated by the database (`gen_random_uuid()`), unless a natural key exists (`jti`, `user_id`, `service`, …).
-- Every table has `created_at`, recording when the row was inserted. Event columns such as `assigned_at`, `issued_at` and `revoked_at` sit alongside it where they carry business meaning.
-- Only rows edited in place have `updated_at`, which means `identity_users` (free-form edits) and the federation snapshots and cursors. Every other change has its own column (`revoked_at`, `superseded_at`, `ended_at`, `idle_expires_at`).
-- The database is the clock. Every persisted timestamp comes from `now()`. z-auth passes durations such as TTLs, timeouts and retention, never instants, and reads back what was stored. The JWT `iat`/`exp` are copied from the stored generation.
-- All timestamps are `timestamptz`, which is stored as a UTC instant. The pool also pins each connection's `TimeZone` to `UTC`.
-- Closed value sets are Postgres ENUM types, namely `session_status`, `revocation_scope`, `revocation_reason`, `revocation_status`, `permission_kind` and `verifying_key_status`, plus `node_state` and `heartbeat_status` in the cluster set and `mfa_method`, `mfa_factor_status` and `mfa_totp_algorithm` in the mfa set.
-
-## Tables
-
-| Table | Purpose |
-|---|---|
-| identity tables | |
-| `identity_users` | User accounts: email, password hash, profile, active/verified flags |
-| `identity_roles` | RBAC roles. `code` is the immutable identifier carried in tokens (`rol`) |
-| `identity_role_assignments` | Which user holds which role; `revoked_at` keeps the history as an audit trail |
-| security tables | |
-| `security_permissions`, `security_permission_options` | The application's permission catalog (`bool`, `single`, `multi`, `text`). Every `bool`/`text` permission and every option takes a permanent position from `security_permission_position_seq`, which is how permissions are encoded in tokens |
-| `security_user_grants`, `security_role_grants` | Granted values, directly to a user or to a role: one row per `bool`/`text` grant or per chosen option. Read only at login / refresh |
-| `security_sessions` | One row per login on one device: status (`active`, `revoked` or `compromised`), creating IP, user agent, the authentication methods it was opened with (`amr`, e.g. `{mfa,otp,pwd}`), current generation, idle and absolute expiry, and a per-session secret. No tokens are stored |
-| `security_session_generations` | Rotation history (newest N per session, default 10): who each generation was issued to (IP, user agent, fingerprint hash, parent `jti`), `issued_at`, `superseded_at`. The row's `id` is the access token's `jti` |
-| `security_session_fork_aliases` | Federation mode: the losing variants of a benign refresh fork, still accepted once so their client can move to the winning chain |
-| `security_token_revocations` | Persisted denylist (`session`, `user` or `token` scope), `pending` → `enforced` once a covered token is used. Rows only live for the access TTL plus leeway |
-| `security_verifying_keys` | Public Ed25519 keys published by instances; `revoked` keys are rejected everywhere |
-| cluster tables (`migrations_cluster/`, feature `shared`) | |
-| `cluster_nodes` | Registry of z-auth instances as a state machine: lifecycle `state` (`joining` → `active` → `leaving`) and `heartbeat` (`online` → `offline` → `missing`). Written only on state changes |
-| `cluster_account_snapshots`, `cluster_catalog_snapshot` | Federation mode: per-user account/authz snapshots and the permission catalog, published by the authority |
-| `cluster_sync_site` | Federation mode: this database's site id; its row switches change capture on |
-| `cluster_change_feed` | Federation mode: one entry per synced record (its latest change), written by triggers |
-| `cluster_feed_cursors` | Federation mode: how far this database has read each other site's feed |
-| `cluster_sync_freshness` | Federation mode: when this database last caught up with each service |
-| mfa tables (`migrations_mfa/`, feature `mfa`) | |
-| `mfa_factors` | A user's second factors: `pending` (enrolling, expires) or `active`, at most one of each per method. TOTP secrets and email / SMS destinations are sealed by z-auth-mfa; the last accepted TOTP step makes each code usable once; `code_*` hold a pending email / SMS code |
-| `mfa_recovery_codes` | Single-use recovery codes as keyed hashes, replaced as a set |
-| `mfa_challenges` | Logins that passed the password step: the token secret's keyed hash, the client, attempts, expiry, consumption and the email / SMS code sent for it |
-| `mfa_user_state` | Failed second-factor attempts and lockout per user |
-
-Refresh rotation is a compare-and-swap on `security_sessions.current_generation`, done inside a transaction. When refreshes race, one wins and the others get a conflict, which the core resolves through the grace window.
-
-### Entity-relationship diagram
-
-This diagram shows the schema built by [`migrations/`](migrations/) and [`migrations_mfa/`](migrations_mfa/). Solid lines are foreign keys, and every one of them is `ON DELETE CASCADE`. The dotted lines from `security_token_revocations` are logical references only. `subject` holds a session, user or access-token id, depending on `scope`, so there is no FK constraint. A revocation row can outlive what it refers to. The `cluster_` tables have no foreign keys and are left out.
-
-```mermaid
-erDiagram
-    identity_users ||--o{ identity_role_assignments : "is assigned"
-    identity_roles ||--o{ identity_role_assignments : "is granted via"
-    identity_users ||--o{ security_sessions : "logs in as"
-    security_sessions ||--|{ security_session_generations : "rotates through"
-    security_sessions ||--o{ security_session_fork_aliases : "fork losers"
-    security_permissions ||--o{ security_permission_options : "offers"
-    identity_users ||--o{ security_user_grants : "is granted"
-    identity_roles ||--o{ security_role_grants : "grants"
-    security_permissions ||--o{ security_user_grants : "of"
-    security_permissions ||--o{ security_role_grants : "of"
-    security_permission_options |o--o{ security_user_grants : "chosen"
-    security_permission_options |o--o{ security_role_grants : "chosen"
-    security_sessions |o..o{ security_token_revocations : "subject (scope = session)"
-    identity_users |o..o{ security_token_revocations : "subject (scope = user)"
-    identity_users ||--o{ mfa_factors : "enrolls"
-    identity_users ||--o{ mfa_recovery_codes : "holds"
-    identity_users ||--o{ mfa_challenges : "is challenged"
-    identity_users ||--o| mfa_user_state : "fails / is locked"
-
-    identity_users {
-        uuid id PK "gen_random_uuid()"
-        varchar(255) email UK "unique on lower(email)"
-        text password_hash "nullable"
-        varchar(100) username UK "nullable, unique on lower(username)"
-        varchar(255) first_name
-        varchar(255) last_name
-        text avatar_url
-        bool is_active "default true"
-        bool is_verified "default false"
-        timestamptz created_at "now()"
-        timestamptz updated_at "now(), set on every update"
-    }
-
-    identity_roles {
-        uuid id PK "gen_random_uuid()"
-        varchar(50) name UK
-        text description
-        timestamptz created_at "now()"
-        varchar(64) code UK "immutable, in tokens (rol)"
-    }
-
-    identity_role_assignments {
-        uuid id PK "gen_random_uuid()"
-        uuid user_id FK
-        uuid role_id FK
-        timestamptz assigned_at "now()"
-        timestamptz revoked_at "NULL = active assignment"
-        timestamptz created_at "now()"
-    }
-
-    security_sessions {
-        uuid id PK "gen_random_uuid()"
-        uuid user_id FK
-        bytea secret "mixed into refresh-token MACs"
-        session_status status "active | revoked | compromised"
-        revocation_reason end_reason "set when ended"
-        inet created_ip
-        varchar(512) user_agent
-        text[] amr "authentication methods, default {pwd}"
-        integer current_generation "CAS target on refresh"
-        timestamptz created_at "now()"
-        timestamptz idle_expires_at "now() + idle, pushed on refresh"
-        timestamptz absolute_expires_at "now() + absolute, hard cap"
-        timestamptz ended_at
-        bigint merge_rev "bumped by every write (federation CAS)"
-    }
-
-    security_session_generations {
-        uuid id PK "gen_random_uuid(), = access-token jti"
-        uuid session_id FK
-        integer generation "unique per session"
-        inet issued_ip
-        timestamptz issued_at "now()"
-        timestamptz access_expires_at "now() + access TTL"
-        timestamptz superseded_at "set when generation + 1 is issued"
-        timestamptz created_at "now()"
-        uuid parent_jti "access token presented to obtain it"
-        varchar(512) issued_user_agent
-        bytea fingerprint_hash "SHA-256, 32 bytes"
-    }
-
-    security_session_fork_aliases {
-        uuid jti PK
-        uuid session_id FK
-        integer generation
-        uuid parent_jti
-        inet issued_ip
-        varchar(512) issued_user_agent
-        bytea fingerprint_hash
-        timestamptz issued_at
-        timestamptz access_expires_at
-        timestamptz superseded_at
-        timestamptz created_at "now()"
-    }
-
-    security_token_revocations {
-        uuid id PK "gen_random_uuid()"
-        revocation_scope scope "session | user | token"
-        uuid subject "session, user or token id (no FK)"
-        revocation_reason reason
-        timestamptz revoked_at "now()"
-        timestamptz expires_at "now() + access TTL + leeway"
-        timestamptz created_at "now()"
-        revocation_status status "pending | enforced"
-        uuid origin_node "issuing instance"
-        timestamptz enforced_at
-        uuid enforced_by
-    }
-
-    security_permissions {
-        uuid id PK "gen_random_uuid()"
-        varchar(64) code UK
-        permission_kind kind "bool | single | multi | text"
-        text description
-        integer position UK "bool / text only; permanent"
-        integer max_length "text only"
-        timestamptz created_at "now()"
-    }
-
-    security_permission_options {
-        uuid id PK "gen_random_uuid()"
-        uuid permission_id FK
-        varchar(64) code "unique per permission"
-        integer position UK "permanent"
-        timestamptz created_at "now()"
-    }
-
-    security_user_grants {
-        uuid id PK "gen_random_uuid()"
-        uuid user_id FK
-        uuid permission_id FK
-        uuid option_id FK "single / multi"
-        text text_value "text"
-        timestamptz created_at "now()"
-    }
-
-    security_role_grants {
-        uuid id PK "gen_random_uuid()"
-        uuid role_id FK
-        uuid permission_id FK
-        uuid option_id FK "single / multi"
-        text text_value "text"
-        timestamptz created_at "now()"
-    }
-
-    mfa_factors {
-        uuid id PK "chosen by z-auth-mfa"
-        uuid user_id FK
-        mfa_method method "totp | email | sms"
-        mfa_factor_status status "pending | active"
-        varchar(64) label
-        bytea secret_sealed "TOTP"
-        mfa_totp_algorithm totp_algorithm "TOTP"
-        smallint totp_digits "TOTP"
-        integer totp_period_secs "TOTP"
-        bigint last_used_step "TOTP, CAS target"
-        bytea destination_sealed "email / sms"
-        varchar(64) destination_hint "masked"
-        bytea code_hash "pending email / sms code"
-        timestamptz code_expires_at
-        timestamptz code_sent_at
-        integer code_sends
-        integer code_attempts
-        timestamptz created_at "now()"
-        timestamptz expires_at "pending only"
-        timestamptz confirmed_at "active only"
-        timestamptz last_used_at
-    }
-
-    mfa_recovery_codes {
-        uuid id PK "gen_random_uuid()"
-        uuid user_id FK
-        bytea code_hash "HMAC, unique per user"
-        timestamptz created_at "now()"
-        timestamptz used_at "NULL = unused"
-    }
-
-    mfa_challenges {
-        uuid id PK
-        uuid user_id FK
-        bytea secret_hash "HMAC of the token secret"
-        inet created_ip
-        varchar(512) user_agent
-        bytea fingerprint_hash
-        integer attempts
-        timestamptz created_at "now()"
-        timestamptz expires_at "now() + challenge TTL"
-        timestamptz consumed_at "single use"
-        uuid code_factor_id "factor the code was sent through"
-        bytea code_hash
-        timestamptz code_expires_at
-        timestamptz code_sent_at
-        integer code_sends
-        integer code_attempts
-    }
-
-    mfa_user_state {
-        uuid user_id PK
-        integer failures
-        timestamptz window_started_at "now()"
-        timestamptz locked_until
-    }
-```
-
-### Constraints and indexes
-
-| Table | Constraint / index | Purpose |
-|---|---|---|
-| `identity_users` | `identity_users_email`, `identity_users_username_key` (unique on `lower(...)`) | One account per email and per username, case-insensitively |
-| `identity_roles` | `identity_roles_name_key`, `identity_roles_code_key` (unique), `chk_identity_roles_code_format` | Unique names; unique, well-formed codes |
-| `identity_role_assignments` | `unique_user_role_active` (unique, partial: `revoked_at IS NULL`) | A user holds a role at most once at a time, while old revoked assignments stay as an audit trail |
-| `identity_role_assignments` | `chk_identity_role_assignments_revoked_after_assigned` | `revoked_at` can't precede `assigned_at` |
-| `identity_role_assignments` | `idx_identity_role_assignments_active`, `idx_identity_role_assignments_removed` (partial) | Fast lookup of a user's active and revoked assignments |
-| `identity_role_assignments` | `idx_identity_role_assignments_user_id`, `idx_identity_role_assignments_role_id` | FK lookups |
-| `security_permissions` | `security_permissions_code_key`, `security_permissions_position_key` (unique) | One entry per code; positions never collide |
-| `security_permissions` | `chk_security_permissions_position`, `chk_security_permissions_max_length` | Position exactly for `bool`/`text`; `max_length` exactly for `text` |
-| `security_permission_options` | `security_permission_options_permission_code_key`, `security_permission_options_position_key` (unique) | Option codes unique per permission; positions never collide |
-| `security_*_grants` | `*_value_key` (partial: `option_id IS NULL`), `*_option_key` (partial: `option_id IS NOT NULL`) | One `bool`/`text` row per owner and permission; one row per chosen option |
-| `security_*_grants` | `idx_security_user_grants_user_id`, `idx_security_role_grants_role_id` | `effective_grants` at login / refresh |
-| `security_sessions` | `chk_security_sessions_ended` | Active ⇔ `ended_at` and `end_reason` are both NULL |
-| `security_sessions` | `chk_security_sessions_generation_positive` | `current_generation >= 1` |
-| `security_sessions` | `idx_security_sessions_user_active` (partial: `status = 'active'`) | Session cap and logout-all, oldest first |
-| `security_sessions` | `idx_security_sessions_purge` (expression: `LEAST(idle, absolute, COALESCE(ended_at, 'infinity'))`) | Purge is an index scan. The purge query must repeat the expression verbatim |
-| `security_session_generations` | `security_session_generations_session_generation_key` (unique `(session_id, generation)`) | One row per rotation. Rows older than the newest N are trimmed on each refresh |
-| `security_session_generations` | `chk_security_session_generations_positive`, `chk_security_session_generations_fingerprint` | `generation >= 1`; a fingerprint hash is 32 bytes |
-| `security_session_fork_aliases` | `idx_security_session_fork_aliases_session` | Aliases of a session's generation |
-| `security_token_revocations` | `chk_security_token_revocations_enforced` | `enforced` ⇔ `enforced_at` is set |
-| `security_token_revocations` | `idx_security_token_revocations_expires_at` | `list_active()` and `purge_expired()` |
-| `security_verifying_keys` | `security_verifying_keys_kid_key` (unique), `chk_security_verifying_keys_length`, `chk_security_verifying_keys_revoked` | One key per `kid`; 32-byte keys; `revoked` ⇔ `revoked_at` is set |
-| `cluster_nodes` | `chk_cluster_nodes_port`, `chk_cluster_nodes_address` | A valid port; an IP or a DNS name |
-| `cluster_change_feed` | `idx_cluster_change_feed_order` (`txid, seq`) | Feed pages are read in commit order |
-| `mfa_factors` | `uq_mfa_factors_user_method_active`, `uq_mfa_factors_user_method_pending` (unique, partial) | At most one active and one pending factor per user and method |
-| `mfa_factors` | `chk_mfa_factors_totp`, `chk_mfa_factors_destination`, `chk_mfa_factors_pending`, `chk_mfa_factors_active`, `chk_mfa_factors_code` | TOTP columns exactly for TOTP, a destination exactly for email / SMS, `expires_at` ⇔ pending, `confirmed_at` ⇔ active, a complete 32-byte code |
-| `mfa_factors` | `idx_mfa_factors_pending_expiry` (partial), `idx_mfa_challenges_expires_at` | Purge of expired enrollments and challenges |
-| `mfa_recovery_codes` | `uq_mfa_recovery_codes_user_code` | Codes unique per user |
-
-The `CONSTRAINT_*` constants in `src/constants.rs` map the unique indexes above to domain errors (`EmailAlreadyTaken`, `RoleAlreadyExists`, …). Allowed status, scope and reason values are enforced by the ENUM types, so no CHECKs are needed.
-
----
+Both extensions can be registered on the same builder. In that case run `run_cluster_migrations` and `run_mfa_migrations` one after the other; each applies the core set first, which is a no-op the second time.
 
 ## Configuration
 
-`PgConfig::from_env()` reads these variables.
+`PgConfig::from_env()` reads seven variables. Three are required and the call fails with a `missing env var ...` message when one of them is absent; the others fall back to the defaults in `src/constants.rs`. Numeric values that do not parse produce an `invalid ...` error instead of silently using the default.
+
+| Variable | Required | Default | Meaning |
+|---|---|---|---|
+| `DB_HOST` | yes | none | Server host name or address |
+| `DB_PORT` | no | `5432` | Server port, parsed as `u16` |
+| `DB_USER` | yes | none | Login role |
+| `DB_PASSWORD` | yes | none | Password, inserted into the connection URL as is (see the gotchas below) |
+| `DB_NAME` | no | `auth` | Database name |
+| `DB_MAX_POOL_SIZE` | no | `10` | Maximum number of pooled connections |
+| `DB_CONNECT_TIMEOUT_SECS` | no | `5` | Seconds to wait for a connection from the pool before failing |
+
+The workspace's `env.example` lists the same variables at the end of the file.
 
 ```env
 DB_HOST=localhost
-DB_PORT=5432          # optional, defaults to 5432
+DB_PORT=5432
 DB_USER=postgres
 DB_PASSWORD=secret
-DB_NAME=auth          # optional, defaults to "auth"
-DB_MAX_POOL_SIZE=10   # optional
-DB_CONNECT_TIMEOUT_SECS=5  # optional
+DB_NAME=auth
+DB_MAX_POOL_SIZE=10
+DB_CONNECT_TIMEOUT_SECS=5
 ```
 
----
+`PgConfig::from_env` does not read a `.env` file itself; loading one is the host's job. Only the `setup_db` binary parses `.env` on its own.
 
-## Migrations
+### Pool behaviour
 
-The schema is a series of numbered SQL files in [`migrations/`](migrations/), applied in order by sqlx's migrator. It is embedded in the crate as `MIGRATOR` and run with `run_migrations(&pool)`. Postgres records each applied file, with a checksum, in the `_sqlx_migrations` table, so a run only applies the files it hasn't seen. Concurrent runs are serialised with an advisory lock.
+`build_pg_pool` sets two pool options and one connection option, and leaves everything else at sqlx's defaults. `max_connections` comes from `DB_MAX_POOL_SIZE`, and `acquire_timeout` from `DB_CONNECT_TIMEOUT_SECS`, so the timeout bounds how long a query waits for a free or newly opened connection rather than only the TCP handshake. Every connection is opened with the startup option `timezone=UTC` through `pool::connect_options`, which makes server-side rendering and date arithmetic (`now()::date`, text output, `date_trunc`) independent of the server's default zone. The values themselves are unaffected, because every timestamp column is `timestamptz` and stores an absolute instant.
 
-Never edit a migration that has been applied anywhere, because the checksum check will refuse to run. To change the schema, add the next file, e.g. `0002_add_login_attempts.sql`.
+The adapter sets no `statement_timeout`, no `lock_timeout` and no idle or lifetime limits of its own, so sqlx's defaults apply (connections idle for ten minutes or older than thirty minutes are recycled, and a connection is pinged before it is handed out). `connect_with` opens the first connection eagerly, so `build_pg_pool` fails at startup when the database is unreachable instead of on the first query. A host that needs server-side timeouts can add them as further startup options on its own `PgConnectOptions`, as shown below.
 
-One database holds up to three sets, each owning a version range.
+## Gotchas
 
-| Set | Directory | Versions | Migrator | Feature |
-|---|---|---|---|---|
-| core: `identity_`, `security_` tables | `migrations/` | below 1000 | `MIGRATOR` (`run_migrations`) | — |
-| cluster: `cluster_` tables and the change-feed triggers | `migrations_cluster/` | 1001–1999 | `CLUSTER_MIGRATOR` (`run_cluster_migrations`) | `shared` |
-| mfa: `mfa_` tables | `migrations_mfa/` | from 2001 | `MFA_MIGRATOR` (`run_mfa_migrations`) | `mfa` |
+The connection URL is built with plain string formatting. `connection_url()` renders `postgres://{user}:{password}@{host}:{port}/{name}` without percent-encoding anything, while sqlx percent-decodes the user and password when it parses the URL. A password containing `@`, `:`, `/`, `?`, `#`, `%` or a space therefore breaks the URL or is decoded into a different value. There are three ways around it. The simplest is a password made of letters, digits and unreserved punctuation. The second is to store the percent-encoded form in `DB_PASSWORD` (for example `p%40ss` for `p@ss`), which sqlx decodes back to the real password. The third is to skip `build_pg_pool` and build the pool from options you construct yourself, either from a correctly encoded URL through `pool::connect_options` or directly with `PgConnectOptions`, in which case you must add the UTC time zone yourself.
 
-The optional sets apply after the core set. All of them record into `_sqlx_migrations` and ignore each other's versions.
+```rust
+use std::time::Duration;
 
-The current migrations are `0001` initial schema and `0002` session `amr` (`migrations/`), `1001` cluster schema (`migrations_cluster/`), `2001` mfa schema (`migrations_mfa/`), and `0001` session store plus `0002` session `amr` (`migrations_session_store/`, feature `federation`). These files replaced the earlier migrations (0001–0008, and the session store's 0001–0002) when the tables got their layer prefixes. A database built with the earlier files can't be upgraded in place, so `setup_db` refuses it and asks for `--reset`, which drops everything and rebuilds it.
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 
-Adding an ENUM value takes `ALTER TYPE revocation_reason ADD VALUE '...'` in a new migration, plus the matching variant in `src/enums.rs`. Values can't be removed or reordered without recreating the type.
-
-## Federation mode
-
-Feature `federation` serves z-auth-cluster's `Federation` extension (`AUTH_DEPLOYMENT_MODE=federation`, see `docs/replication.md`).
-
-The authority uses the core and cluster sets (`run_cluster_migrations`) and `repositories(&pool)`. Every other service uses the session-store schema (`migrations_session_store/`, applied by `run_session_store_migrations`) and `federation.session_store_repositories(SessionRepositories { … })`.
-
-Both build `Federation::new(settings, transport, Arc::new(PgNodeRepository::new(pool.clone())), Arc::new(PgSyncStore::new(pool)))` and register it with `.extension(federation.clone())`.
-
-- The session store holds `security_sessions` (with generations and fork aliases), `security_token_revocations`, `security_verifying_keys`, the account / catalog snapshots, the service's own `cluster_nodes` and the change feed. It has no `identity_` tables and no grants.
-- Give the session store its own Postgres schema, so the z-auth tables never collide with the host's, by connecting with `options=-c search_path=auth`.
-- The feed (`cluster_change_feed`) is written by triggers on the synced tables, so direct SQL edits are captured too. Capture switches on when the service first starts in federation mode (`cluster_sync_site` gets its row). Until then the triggers do nothing.
-
-## setup_db — database setup script
-
-```bash
-cargo run -p z-auth-postgres --bin setup_db            # create DB + apply pending migrations
-cargo run -p z-auth-postgres --bin setup_db -- --reset # dev only: drop everything first
-cargo run -p z-auth-postgres --features shared --bin setup_db -- --cluster  # also the cluster tables
-cargo run -p z-auth-postgres --features mfa --bin setup_db -- --mfa           # also the mfa tables
+async fn pool_with_awkward_password() -> Result<sqlx::PgPool, sqlx::Error> {
+    let options = PgConnectOptions::new()
+        .host("db.internal")
+        .port(5432)
+        .username("auth_service")
+        .password("p@ss/word#1")
+        .database("auth")
+        .options([("timezone", "UTC"), ("statement_timeout", "5s")]);
+    PgPoolOptions::new()
+        .max_connections(10)
+        .acquire_timeout(Duration::from_secs(5))
+        .connect_with(options)
+        .await
+}
 ```
 
-It runs these steps.
+The `mfa` feature depends on `z-auth-mfa` with `default-features = false`, which means the adapter alone does not enable z-auth-mfa's `aead` feature and its built-in XChaCha20-Poly1305 sealer. A host normally depends on `z-auth-mfa` directly with default features, and Cargo's feature unification then turns `aead` on for the whole build. A host that disables the default features of its own `z-auth-mfa` dependency must supply a sealer with `Mfa::with_sealer`, otherwise `ZAuth::builder(...).build()` fails with an `AuthError::Config` when the extension is configured.
 
-1. Loads `.env` from the current directory (skips silently if absent). Real environment variables take priority.
-2. Checks the PostgreSQL server. If it is unreachable or the credentials are wrong, it prints a specific error and exits.
-3. Creates the database if it doesn't exist yet.
-4. Replaces a legacy schema. Tables created before versioned migrations (no `_sqlx_migrations`) are dropped, and so is everything when `--reset` is given — under both the current table names and the names used before the baseline. If any table contains data, it asks first.
-   ```
-   ⚠️  Existing tables with data were found in database 'auth'.
-      Drop everything and re-create? [y/N]:
-   ```
-   Answering `N` exits with no changes made.
-5. Applies pending migrations and lists each one — the core set, then with `--cluster` the cluster set and with `--mfa` the mfa set. A database that is already up to date is left untouched. A database built with the migrations the baseline replaced is refused with a hint to rerun with `--reset`.
+`setup_db` only knows the core, cluster and mfa sets. It cannot install the session-store schema, and pointing it at a session-store database makes it refuse, because the session store's `0001` and `0002` have different checksums from the core files with the same versions. Install a session store from the service itself with `run_session_store_migrations`, as described in [federation storage](docs/federation.md).
 
----
+The session store must live in a schema of its own. `SESSION_STORE_MIGRATOR` does not ignore unknown versions, and its versions overlap the core set's, so it fails if the target schema's `_sqlx_migrations` already holds any other set.
+
+Assigning a role that a user already holds does not produce `RoleAlreadyAssigned` from the database. The insert uses `ON CONFLICT DO NOTHING`, so `PgUserRoleRepository::assign` returns `false` instead, and the constraint mapping for `unique_user_role_active` only fires for writes that bypass that query.
+
+## Module layout
+
+The crate is small enough to read end to end. SQL lives in constants next to the repository that uses it, rows are decoded into private structs and converted into domain types at the boundary, and the cluster and mfa code compiles only with its feature.
+
+```text
+adapters/postgres/
+├── Cargo.toml
+├── migrations/                     core set, versions below 1000
+│   ├── 0001_initial_schema.sql
+│   └── 0002_session_amr.sql
+├── migrations_cluster/             cluster set, versions 1001 to 1999 (feature shared)
+│   └── 1001_cluster_schema.sql
+├── migrations_mfa/                 mfa set, versions from 2001 (feature mfa)
+│   └── 2001_mfa_schema.sql
+├── migrations_session_store/       session-store schema (feature federation)
+│   ├── 0001_session_store.sql
+│   └── 0002_session_amr.sql
+├── src/
+│   ├── lib.rs                      repositories(), the migrators, re-exports
+│   ├── config.rs                   PgConfig
+│   ├── pool.rs                     build_pg_pool, connect_options
+│   ├── constants.rs                defaults, DB_* names, constraint names
+│   ├── errors.rs                   map_sqlx_error
+│   ├── codes.rs                    generation u32 and i32 conversion
+│   ├── enums.rs                    sqlx mirrors of the core ENUM types
+│   ├── rows.rs                     row structs and their domain conversions
+│   ├── user_repository.rs
+│   ├── role_repository.rs
+│   ├── user_role_repository.rs
+│   ├── permission_repository.rs
+│   ├── session_repository.rs
+│   ├── revocation_repository.rs
+│   ├── key_repository.rs
+│   ├── queries/                    SQL constants for the core repositories
+│   │   ├── user_queries.rs
+│   │   ├── role_queries.rs
+│   │   ├── user_role_queries.rs
+│   │   ├── permission_queries.rs
+│   │   ├── session_queries.rs
+│   │   ├── revocation_queries.rs
+│   │   └── key_queries.rs
+│   ├── cluster/                    feature shared
+│   │   ├── node_repository.rs      PgNodeRepository
+│   │   ├── node_queries.rs
+│   │   ├── node_row.rs             node_state, heartbeat_status
+│   │   ├── sync_store.rs           PgSyncStore (feature federation)
+│   │   └── sync_queries.rs
+│   ├── mfa/                        feature mfa
+│   │   ├── mfa_repository.rs       PgMfaRepository
+│   │   ├── mfa_queries.rs
+│   │   └── mfa_row.rs              mfa_method, mfa_factor_status, mfa_totp_algorithm
+│   └── bin/
+│       └── setup_db.rs             development database setup
+└── tests/                          integration tests against a real database
+```
 
 ## Integration tests
 
-The tests in `tests/` need a reachable database. `helpers::pool()` applies pending migrations itself, so it's enough to have run `setup_db` once:
+The tests in `tests/` run against a real PostgreSQL server; there is no mock. They share the helpers in `tests/helpers.rs`, whose `pool()` builds a pool and applies the core migrations, while `cluster_pool()` and `mfa_pool()` also apply their sets and `session_store_pool(schema)` creates a fresh schema and installs the session store in it. The helpers do not create the database, so run `setup_db` once beforehand.
 
-```bash
-cargo test -p z-auth-postgres                  # core ports
-cargo test -p z-auth-postgres --all-features   # plus the cluster and mfa ports (applies their sets)
+The tests do not load `.env`. They call `PgConfig::from_env()` and, if that fails for any reason (one required variable missing is enough), ignore every `DB_*` variable and fall back to a fixed configuration of `localhost`, port `5432`, user `postgres`, password `passw`, database `auth`, a pool of 20 connections and a 10-second timeout. Either export the variables in the shell that runs `cargo test` or make your local server match that fallback.
+
+```sh
+export DB_HOST=localhost DB_USER=postgres DB_PASSWORD=secret DB_NAME=auth
+cargo run -p z-auth-postgres --bin setup_db
+cargo test -p z-auth-postgres
+cargo test -p z-auth-postgres --all-features
 ```
+
+The plain run covers the core repositories. Four test binaries declare `required-features` and only run with `--all-features` or the specific feature, and the `migrations` binary has extra cases behind `shared` and `mfa`.
+
+| Test binary | Feature | Covers |
+|---|---|---|
+| `register_user`, `roles`, `user_role`, `permissions` | none | Identity and authorization repositories, error mapping |
+| `sessions` | none | Session lifecycle, rotation, purge, revocation round trips |
+| `keys` | none | Exactly-once revocation enforcement, verifying key publication and revocation |
+| `migrations` | none (more cases with `shared`, `mfa`) | Recorded versions, idempotent reruns, ENUM types, UTC sessions |
+| `node_registry` | `shared` | Guarded node transitions and eviction |
+| `sync` | `federation` | Feed paging, commit-order safety, merges, cursors, snapshots |
+| `federation` | `federation` | Login at an authority, refresh and logout at a session store |
+| `mfa` | `mfa` | `PgMfaRepository` end to end with the built-in sealer |
+
+All tests use unique names and can run in parallel against one database. The `sync` and `federation` tests create the `cluster_sync_site` row in the test database, which switches change capture on there for good; the session-store schemas they create are dropped at the end of each test, but an interrupted run can leave one behind.
+
+## Guides
+
+The [schema reference](docs/schema.md) documents every table, column, ENUM type, sequence, constraint and index, with an entity-relationship diagram. [Migrations](docs/migrations.md) covers the four migration sets, how to add a migration or an ENUM value, the baseline history and the `setup_db` binary. [Federation storage](docs/federation.md) explains the authority and session-store databases, the trigger-driven change feed and the sync store. [Internals](docs/internals.md) walks through error mapping, the refresh rotation transaction and the compare-and-swap queries.
+
+For the wider picture, the workspace guides describe the [storage ports](../../docs/storage-ports.md) this crate implements, the [configuration](../../docs/configuration.md) of z-auth itself and the [sessions and tokens](../../docs/sessions-and-tokens.md) model the session tables persist. The [z-auth-cluster](../cluster/README.md) and [z-auth-mfa](../mfa/README.md) crates document the extensions whose storage lives here.
