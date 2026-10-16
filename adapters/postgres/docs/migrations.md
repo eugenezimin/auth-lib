@@ -125,7 +125,7 @@ flowchart TD
     A[Print banner] --> B["Load .env from the current directory (real env vars win)"]
     B --> C{"--cluster or --mfa without its feature?"}
     C -- yes --> X1[Exit with a rebuild hint]
-    C -- no --> D["PgConfig::from_env"]
+    C -- no --> D["PgConfig::from_source (AUTH_CONFIG_FILE, then DB_*)"]
     D --> E["Connect to the postgres maintenance database"]
     E --> F{Target database exists?}
     F -- no --> G[CREATE DATABASE]
@@ -152,7 +152,7 @@ flowchart TD
 
 The `.env` file is parsed by hand rather than with a library. Each non-empty line that does not start with `#` is split at the first `=`, the key and value are trimmed, and surrounding double or single quotes are stripped from the value. A variable that is already set in the real environment is never overridden, so `DB_NAME=scratch cargo run ...` wins over the file. Inline comments are not stripped, which means a line like `DB_NAME=auth  # optional` sets the name to `auth  # optional`; the example in `env.example` uses such comments, so remove them when copying it into `.env`. When no `.env` exists, the binary says so and relies on the environment.
 
-The configuration comes from `PgConfig::from_env`, so the same three variables are required and the same defaults apply as for the library (see the [crate README](../README.md#configuration)). The binary prints the host, port, user and database it is about to use, never the password.
+The configuration comes from `PgConfig::from_source` over `ConfigSource::standard()`, so the same three settings are required and the same defaults apply as for the library (see the [crate README](../README.md#configuration)). When `AUTH_CONFIG_FILE` names a YAML file, after `.env` has been loaded, the binary reads its `database` section too, and the `DB_*` variables override it. The binary prints the host, port, user and database it is about to use, never the password.
 
 To create the database, `setup_db` first connects to the `postgres` maintenance database on the same server with the same credentials, built with `connection_url_for("postgres")`. It checks `pg_database` and issues `CREATE DATABASE "<name>"` when the target is missing, so the configured role needs the `CREATEDB` privilege for a first run. Connection failures are diagnosed by message, distinguishing an unreachable server (with hints for starting PostgreSQL on macOS and Linux), failed authentication and a missing database.
 

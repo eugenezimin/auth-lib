@@ -21,15 +21,15 @@ use wiremock::matchers::{basic_auth, body_string_contains, header, method, path}
 use wiremock::{Mock, MockServer, ResponseTemplate};
 use z_auth::AuthError;
 use z_auth_mfa::{CodeDelivery, CodePurpose, CodeSender, MfaMethod};
-use z_auth_mfa_delivery::config::{
+use z_auth_mfa_sender::config::{
     MailgunConfig, PostmarkConfig, SendGridConfig, SmtpConfig, SmtpSecurity, TwilioConfig,
     TwilioSender, WebhookConfig,
 };
-use z_auth_mfa_delivery::constants::{
+use z_auth_mfa_sender::constants::{
     MAILGUN_API_EU, WEBHOOK_SIGNATURE_HEADER, WEBHOOK_TIMESTAMP_HEADER,
 };
-use z_auth_mfa_delivery::sms::signature;
-use z_auth_mfa_delivery::{
+use z_auth_mfa_sender::sms::signature;
+use z_auth_mfa_sender::{
     DeliveryConfig, EmailProvider, MethodRouter, Secret, SmsProvider, build, email, mask, message,
 };
 

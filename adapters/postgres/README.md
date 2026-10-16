@@ -2,7 +2,7 @@
 
 `z-auth-postgres` is the reference PostgreSQL adapter for z-auth. It implements every storage port that the core `z-auth` crate and its optional extensions `z-auth-cluster` and `z-auth-mfa` define, using `sqlx` 0.8 with the Tokio runtime. The dependency points one way only. The core crate never depends on this adapter, so a host application can use it as is, copy and adapt it, or write its own adapter against the same traits; nothing in z-auth assumes PostgreSQL.
 
-The crate ships four things. It provides repository types (`PgUserRepository`, `PgSessionRepository` and the rest) that turn the port calls into SQL, a connection-pool helper that reads `DB_*` environment variables, four embedded migration sets that build the schema, and the `setup_db` binary that creates and upgrades a development database. The guides in [`docs/`](docs/) describe the schema, the migrations, the federation storage and the query internals in depth; this page is the starting point.
+The crate ships four things. It provides repository types (`PgUserRepository`, `PgSessionRepository` and the rest) that turn the port calls into SQL, a connection-pool helper that reads `DB_*` environment variables or the `database` section of a configuration file, four embedded migration sets that build the schema, and the `setup_db` binary that creates and upgrades a development database. The guides in [`docs/`](docs/) describe the schema, the migrations, the federation storage and the query internals in depth; this page is the starting point.
 
 ## Public API
 
@@ -11,7 +11,7 @@ Everything a host needs is re-exported from the crate root, except `connect_opti
 | Item | Kind | Feature | Purpose |
 |---|---|---|---|
 | `repositories(&pool)` | function | none | Returns a `z_auth::Repositories` holding `PgUserRepository`, `PgRoleRepository`, `PgUserRoleRepository`, `PgSessionRepository`, `PgRevocationRepository` and `PgKeyRepository`, all on clones of one pool |
-| `PgConfig` | struct | none | Connection settings with public fields, read by `PgConfig::from_env()`; `connection_url()` and `connection_url_for(db)` render a URL, and `Debug` redacts the password |
+| `PgConfig` | struct | none | Connection settings with public fields, read by `PgConfig::from_env()` or `PgConfig::from_source(&source)`; `connection_url()` and `connection_url_for(db)` render a URL, and `Debug` redacts the password |
 | `build_pg_pool(&PgConfig)` | async function | none | Builds a `sqlx::PgPool` with the configured size and acquire timeout, every connection pinned to UTC |
 | `pool::connect_options(url)` | function | none | Parses a URL into `PgConnectOptions` and adds the `timezone=UTC` startup option, for hosts that build their own pool |
 | `constants` | module | none | Connection defaults, the `DB_*` variable names and the constraint names that map to domain errors |
@@ -205,15 +205,15 @@ Both extensions can be registered on the same builder. In that case run `run_clu
 
 `PgConfig::from_env()` reads seven variables. Three are required and the call fails with a `missing env var ...` message when one of them is absent; the others fall back to the defaults in `src/constants.rs`. Numeric values that do not parse produce an `invalid ...` error instead of silently using the default.
 
-| Variable | Required | Default | Meaning |
-|---|---|---|---|
-| `DB_HOST` | yes | none | Server host name or address |
-| `DB_PORT` | no | `5432` | Server port, parsed as `u16` |
-| `DB_USER` | yes | none | Login role |
-| `DB_PASSWORD` | yes | none | Password, inserted into the connection URL as is (see the gotchas below) |
-| `DB_NAME` | no | `auth` | Database name |
-| `DB_MAX_POOL_SIZE` | no | `10` | Maximum number of pooled connections |
-| `DB_CONNECT_TIMEOUT_SECS` | no | `5` | Seconds to wait for a connection from the pool before failing |
+| Variable | Path in the file | Required | Default | Meaning |
+|---|---|---|---|---|
+| `DB_HOST` | `database.host` | yes | none | Server host name or address |
+| `DB_PORT` | `database.port` | no | `5432` | Server port, parsed as `u16` |
+| `DB_USER` | `database.user` | yes | none | Login role |
+| `DB_PASSWORD` | `database.password` | yes | none | Password, inserted into the connection URL as is (see the gotchas below) |
+| `DB_NAME` | `database.name` | no | `auth` | Database name |
+| `DB_MAX_POOL_SIZE` | `database.max_pool_size` | no | `10` | Maximum number of pooled connections |
+| `DB_CONNECT_TIMEOUT_SECS` | `database.connect_timeout_secs` | no | `5` | Seconds to wait for a connection from the pool before failing |
 
 The workspace's `env.example` lists the same variables at the end of the file.
 
@@ -228,6 +228,22 @@ DB_CONNECT_TIMEOUT_SECS=5
 ```
 
 `PgConfig::from_env` does not read a `.env` file itself; loading one is the host's job. Only the `setup_db` binary parses `.env` on its own.
+
+`PgConfig::from_source(&source)` reads the same settings from the `database` section of a z-auth `ConfigSource`, the YAML configuration file described in the [core configuration guide](../../docs/configuration.md#configuration-file), with the `DB_*` variables layered on top, and `from_env` is the same function over the environment alone. A variable that is set wins over the file, which suits the password in particular. With a file in use, a missing setting is reported with both names, as in `missing DB_PASSWORD or database.password`, a value that does not parse with its path and file, as in `invalid database.port in z-auth.yaml: ...`, and a key in the section that the adapter does not know fails the call.
+
+```yaml
+database:
+  host: db.internal
+  port: 5432
+  user: auth
+  password: ~                  # DB_PASSWORD from the environment
+  name: auth
+```
+
+```rust
+let source = z_auth::conf::config::ConfigSource::standard()?; // AUTH_CONFIG_FILE, then DB_*
+let pool = build_pg_pool(&PgConfig::from_source(&source)?).await?;
+```
 
 ### Pool behaviour
 

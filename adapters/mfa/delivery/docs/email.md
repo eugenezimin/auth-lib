@@ -112,7 +112,7 @@ The HTML part contains the same paragraphs, with the code set in a large monospa
 
 The validity sentence is computed when the message is composed, from the code's `expires_at` and the sending host's current time. The remaining time is rounded up to whole minutes and never shown as less than one, and the word is singular for exactly one minute. With the default `AUTH_MFA_CODE_TTL_SECS` of 300 a fresh code reads "5 minutes". Because `expires_at` comes from the store's clock and the current time from the application host's, a large clock skew between the two would show up here, though it never affects whether the code is accepted.
 
-The wording is fixed. A host that needs its own templates, another language or branding implements `CodeSender` itself, as shown in the [ports guide](../../mfa/docs/ports.md), and may still reuse `message::email` or `email::build_email` (feature `smtp`) for parts of the work.
+The wording is fixed. A host that needs its own templates, another language or branding implements `CodeSender` itself, as shown in the [ports guide](../../docs/ports.md), and may still reuse `message::email` or `email::build_email` (feature `smtp`) for parts of the work.
 
 ## A send from start to finish
 

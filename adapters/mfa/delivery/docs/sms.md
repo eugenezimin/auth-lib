@@ -39,7 +39,7 @@ The `webhook` provider is for every case Twilio does not cover. Each code become
 
 ### The request
 
-The request has a JSON body and a handful of headers of interest. `Content-Type` is `application/json` and `User-Agent` is `z-auth-mfa-delivery/` followed by the crate version. When `AUTH_MFA_SMS_WEBHOOK_BEARER_TOKEN` is set the request carries `Authorization: Bearer <token>`, and when `AUTH_MFA_SMS_WEBHOOK_SECRET` is set it carries `X-ZAuth-Timestamp` and `X-ZAuth-Signature`, described below. Without the respective variables those headers are absent altogether.
+The request has a JSON body and a handful of headers of interest. `Content-Type` is `application/json` and `User-Agent` is `z-auth-mfa-sender/` followed by the crate version. When `AUTH_MFA_SMS_WEBHOOK_BEARER_TOKEN` is set the request carries `Authorization: Bearer <token>`, and when `AUTH_MFA_SMS_WEBHOOK_SECRET` is set it carries `X-ZAuth-Timestamp` and `X-ZAuth-Signature`, described below. Without the respective variables those headers are absent altogether.
 
 The body is a single JSON object with seven string fields.
 
@@ -78,7 +78,7 @@ X-ZAuth-Timestamp: 1700000000
 X-ZAuth-Signature: sha256=<hex of HMAC-SHA256(secret, "{timestamp}.{raw body}")>
 ```
 
-Including the timestamp in the signed input binds it to the body, so a captured request cannot be replayed later with a fresh timestamp, and checking that the timestamp is recent limits replays to a short window. The signature covers neither the URL nor the other headers. The function that computes it is public as `z_auth_mfa_delivery::sms::signature(secret, timestamp, body)` (feature `webhook`), which a Rust receiver or a test can call directly. A known vector, taken from the crate's tests, is useful for checking an implementation in another language. With the secret `key`, the timestamp `1700000000` and the body `{}`, the header value is `sha256=9d713ed406bb7076d4123f0dc2c39d2df5c654ed4b0cd56b52c8b4c940bd63ae`.
+Including the timestamp in the signed input binds it to the body, so a captured request cannot be replayed later with a fresh timestamp, and checking that the timestamp is recent limits replays to a short window. The signature covers neither the URL nor the other headers. The function that computes it is public as `z_auth_mfa_sender::sms::signature(secret, timestamp, body)` (feature `webhook`), which a Rust receiver or a test can call directly. A known vector, taken from the crate's tests, is useful for checking an implementation in another language. With the secret `key`, the timestamp `1700000000` and the body `{}`, the header value is `sha256=9d713ed406bb7076d4123f0dc2c39d2df5c654ed4b0cd56b52c8b4c940bd63ae`.
 
 The bearer token and the signature are independent and can be combined. The token suits gateways behind an API gateway or proxy that already checks bearer tokens, and the signature additionally proves that the body was not altered and is recent. Only one secret can be configured at a time, so rotating it means having the receiver accept both the old and the new secret for the duration of the switch.
 

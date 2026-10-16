@@ -49,7 +49,7 @@ jobs:
           name="z-auth-$GITHUB_REF_NAME-${{ matrix.target }}"
           out="target/${{ matrix.target }}/release"
           mkdir -p "dist/$name"
-          cp "$out/setup_db" "$out/examples/keygen" "$out/examples/mfa_keygen" README.md env.example "dist/$name/"
+          cp "$out/setup_db" "$out/examples/keygen" "$out/examples/mfa_keygen" README.md env.example z-auth.example.yaml "dist/$name/"
           tar -C dist -czf "dist/$name.tar.gz" "$name"
           (cd dist && shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256")
 

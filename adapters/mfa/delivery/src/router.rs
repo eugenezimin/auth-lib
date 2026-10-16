@@ -79,7 +79,7 @@ pub fn sms_sender(cfg: &DeliveryConfig) -> Result<Arc<dyn CodeSender>, AuthError
 
 fn not_compiled(provider: &str) -> AuthError {
     AuthError::Config(format!(
-        "z-auth-mfa-delivery was built without the `{provider}` feature"
+        "z-auth-mfa-sender was built without the `{provider}` feature"
     ))
 }
 

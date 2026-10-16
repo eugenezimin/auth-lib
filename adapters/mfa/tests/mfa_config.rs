@@ -144,6 +144,158 @@ fn the_environment_loader_reads_every_variable() {
     assert_eq!(cfg.purge_retention, Duration::from_secs(3600));
 }
 
+const MFA_YAML: &str = r#"
+mfa:
+  enforcement: roles
+  required_roles: [admin, ops]
+  unenrolled: deny
+  methods: [sms, totp]
+  encryption_key: AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=
+  previous_encryption_keys: [AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=]
+  hash_key: AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=
+  enrollment_ttl_secs: 120
+  end_sessions_on_removal: false
+  totp:
+    issuer: Acme
+    algorithm: SHA256
+    digits: 8
+    period_secs: 60
+    skew_steps: 2
+    secret_bytes: 32
+  recovery:
+    code_count: 0
+    code_length: 16
+  challenge:
+    ttl_secs: 90
+    max_attempts: 3
+    match: [ip, fingerprint]
+  lockout:
+    threshold: 0
+    window_secs: 60
+    duration_secs: 120
+  code:
+    digits: 8
+    ttl_secs: 100
+    resend_secs: 10
+    max_sends: 2
+    auto_send: false
+  purge:
+    interval_secs: 30
+    retention_secs: 3600
+  delivery:
+    email:
+      provider: log
+"#;
+
+#[test]
+fn the_source_loader_reads_the_mfa_section() {
+    use z_auth::conf::config::ConfigSource;
+    use z_auth_mfa::config::MfaSourceLoader;
+
+    let source = ConfigSource::yaml_str(MFA_YAML).unwrap();
+    let cfg = MfaSourceLoader::new(source).load_settings().unwrap();
+
+    assert_eq!(
+        cfg.enforcement,
+        Enforcement::Roles(vec!["admin".into(), "ops".into()])
+    );
+    assert_eq!(cfg.unenrolled, Unenrolled::Deny);
+    assert_eq!(cfg.methods, [MfaMethod::Sms, MfaMethod::Totp]);
+    assert_eq!(cfg.keys.previous_encryption_keys, [[2u8; 32]]);
+    assert_eq!(cfg.totp.issuer.as_deref(), Some("Acme"));
+    assert_eq!(cfg.totp.algorithm, TotpAlgorithm::Sha256);
+    assert_eq!(cfg.totp.digits, 8);
+    assert_eq!(cfg.totp.period, Duration::from_secs(60));
+    assert_eq!(cfg.totp.skew_steps, 2);
+    assert_eq!(cfg.totp.secret_bytes, 32);
+    assert_eq!(cfg.enrollment_ttl, Duration::from_secs(120));
+    assert_eq!((cfg.recovery.count, cfg.recovery.length), (0, 16));
+    assert_eq!(cfg.challenge.ttl, Duration::from_secs(90));
+    assert_eq!(cfg.challenge.max_attempts, 3);
+    assert_eq!(
+        cfg.challenge.client_match,
+        Some(RetryMatch {
+            ip: true,
+            user_agent: false,
+            fingerprint: true
+        })
+    );
+    assert_eq!(cfg.lockout.threshold, 0);
+    assert_eq!(cfg.lockout.window, Duration::from_secs(60));
+    assert_eq!(cfg.lockout.duration, Duration::from_secs(120));
+    assert_eq!(cfg.codes.digits, 8);
+    assert_eq!(cfg.codes.ttl, Duration::from_secs(100));
+    assert_eq!(cfg.codes.resend_after, Duration::from_secs(10));
+    assert_eq!(cfg.codes.max_sends, 2);
+    assert!(!cfg.codes.auto_send);
+    assert!(!cfg.end_sessions_on_removal);
+    assert_eq!(cfg.purge_interval, Duration::from_secs(30));
+    assert_eq!(cfg.purge_retention, Duration::from_secs(3600));
+}
+
+#[test]
+fn the_environment_overrides_the_mfa_section() {
+    use z_auth::conf::config::ConfigSource;
+    use z_auth_mfa::config::MfaSourceLoader;
+
+    let source = ConfigSource::yaml_str(MFA_YAML)
+        .unwrap()
+        .with_lookup(|key| match key {
+            ENV_MFA_TOTP_DIGITS => Some("6".into()),
+            // Blank counts as unset, as for the environment loader.
+            ENV_MFA_TOTP_ISSUER => Some("  ".into()),
+            _ => None,
+        });
+    let cfg = MfaSourceLoader::new(source).load_settings().unwrap();
+    assert_eq!(cfg.totp.digits, 6);
+    assert_eq!(cfg.totp.issuer.as_deref(), Some("Acme"));
+    assert_eq!(cfg.totp.period, Duration::from_secs(60));
+}
+
+#[test]
+fn the_mfa_section_rejects_unknown_keys_but_not_delivery() {
+    use z_auth::conf::config::ConfigSource;
+    use z_auth_mfa::config::MfaSourceLoader;
+
+    let typo = format!("{MFA_YAML}  lockout_secs: 5\n");
+    let source = ConfigSource::yaml_str(&typo).unwrap();
+    match MfaSourceLoader::new(source).load_settings() {
+        Err(ConfigError::Parse { key, .. }) => assert_eq!(key, "mfa.lockout_secs in YAML"),
+        other => panic!("expected an unknown-key error, got {other:?}"),
+    }
+
+    let bad = MFA_YAML.replace("digits: 8\n    period", "digits: eight\n    period");
+    let source = ConfigSource::yaml_str(&bad).unwrap();
+    match MfaSourceLoader::new(source).load_settings() {
+        Err(ConfigError::Parse { key, .. }) => assert_eq!(key, "mfa.totp.digits in YAML"),
+        other => panic!("expected a parse error, got {other:?}"),
+    }
+}
+
+#[test]
+fn the_example_file_loads_with_the_defaults() {
+    use z_auth::conf::config::ConfigSource;
+    use z_auth_mfa::config::MfaSourceLoader;
+
+    let example = concat!(env!("CARGO_MANIFEST_DIR"), "/../../z-auth.example.yaml");
+    let source = ConfigSource::yaml_file(example)
+        .unwrap()
+        .with_lookup(|key| match key {
+            ENV_MFA_HASH_KEY => Some(HASH_KEY.into()),
+            ENV_MFA_ENCRYPTION_KEY => Some(ENCRYPTION_KEY.into()),
+            _ => None,
+        });
+    let from_file = MfaSourceLoader::new(source).load_settings().unwrap();
+    let defaults = MfaDirectLoader::new(
+        RawMfaConfig::default()
+            .hash_key(HASH_KEY)
+            .encryption_key(ENCRYPTION_KEY),
+    )
+    .load_settings()
+    .unwrap();
+    assert_eq!(format!("{from_file:?}"), format!("{defaults:?}"));
+}
+
 #[test]
 fn keys_are_validated() {
     assert_eq!(

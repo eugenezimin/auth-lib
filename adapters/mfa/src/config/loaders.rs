@@ -1,18 +1,24 @@
-//! z-auth-mfa configuration loaders: [`MfaEnvLoader`] (environment) and
-//! [`MfaDirectLoader`] (a pre-filled [`RawMfaConfig`]), plus the parsing
-//! and validation behind [`RawMfaConfig::build`].
+//! z-auth-mfa configuration loaders: [`MfaEnvLoader`] (environment),
+//! [`MfaSourceLoader`] (the `mfa` section of a YAML file and / or the
+//! environment) and [`MfaDirectLoader`] (a pre-filled [`RawMfaConfig`]),
+//! plus the parsing and validation behind [`RawMfaConfig::build`].
 //!
 //! ```rust,no_run
-//! use z_auth_mfa::config::{MfaConfigLoader, MfaEnvLoader};
+//! use z_auth::conf::config::ConfigSource;
+//! use z_auth_mfa::config::{MfaConfigLoader, MfaEnvLoader, MfaSourceLoader};
 //!
 //! let settings = MfaEnvLoader.load_settings().expect("mfa config");
+//!
+//! // AUTH_CONFIG_FILE's `mfa` section, with the environment on top.
+//! let source = ConfigSource::standard().expect("config file");
+//! let settings = MfaSourceLoader::new(source).load_settings().expect("mfa config");
 //! ```
 
 use std::time::Duration;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
-use z_auth::conf::config::{ConfigError, RetryMatch};
+use z_auth::conf::config::{ConfigError, ConfigSource, RetryMatch, Section};
 
 use crate::config::model::{
     ChallengeConfig, CodeConfig, Enforcement, LockoutConfig, MfaKeys, MfaSettings, RawMfaConfig,
@@ -32,8 +38,21 @@ pub trait MfaConfigLoader: Send + Sync {
 }
 
 /// Reads the `AUTH_MFA_*` environment variables.  Like z-auth's
-/// `EnvLoader`, it never loads a `.env` file itself.
+/// `EnvLoader`, it never loads a `.env` file itself.  Same as
+/// `MfaSourceLoader::new(ConfigSource::env())`.
 pub struct MfaEnvLoader;
+
+/// Reads the `mfa` section of a [`ConfigSource`] (except `mfa.delivery`,
+/// which belongs to z-auth-mfa-sender); the environment overrides the file.
+pub struct MfaSourceLoader {
+    pub source: ConfigSource,
+}
+
+impl MfaSourceLoader {
+    pub fn new(source: ConfigSource) -> Self {
+        Self { source }
+    }
+}
 
 /// A caller-supplied [`RawMfaConfig`].
 pub struct MfaDirectLoader {
@@ -54,44 +73,52 @@ impl MfaConfigLoader for MfaDirectLoader {
 
 impl MfaConfigLoader for MfaEnvLoader {
     fn load(&self) -> Result<RawMfaConfig, ConfigError> {
+        MfaSourceLoader::new(ConfigSource::env()).load()
+    }
+}
+
+impl MfaConfigLoader for MfaSourceLoader {
+    fn load(&self) -> Result<RawMfaConfig, ConfigError> {
+        let s = self.source.section(SECTION, KEYS, FOREIGN_SECTIONS)?;
         Ok(RawMfaConfig {
-            enforcement: env_str(ENV_MFA_ENFORCEMENT),
-            required_roles: env_str(ENV_MFA_REQUIRED_ROLES).map(|v| split_list(&v)),
-            unenrolled: env_str(ENV_MFA_UNENROLLED),
-            methods: env_str(ENV_MFA_METHODS).map(|v| split_list(&v)),
-            encryption_key: env_str(ENV_MFA_ENCRYPTION_KEY),
-            previous_encryption_keys: env_str(ENV_MFA_PREVIOUS_ENCRYPTION_KEYS)
+            enforcement: str_opt(&s, ENV_MFA_ENFORCEMENT),
+            required_roles: str_opt(&s, ENV_MFA_REQUIRED_ROLES).map(|v| split_list(&v)),
+            unenrolled: str_opt(&s, ENV_MFA_UNENROLLED),
+            methods: str_opt(&s, ENV_MFA_METHODS).map(|v| split_list(&v)),
+            encryption_key: str_opt(&s, ENV_MFA_ENCRYPTION_KEY),
+            previous_encryption_keys: str_opt(&s, ENV_MFA_PREVIOUS_ENCRYPTION_KEYS)
                 .map(|v| split_list(&v)),
-            hash_key: env_str(ENV_MFA_HASH_KEY),
-            totp_issuer: env_str(ENV_MFA_TOTP_ISSUER),
-            totp_algorithm: env_str(ENV_MFA_TOTP_ALGORITHM),
-            totp_digits: parse_opt(ENV_MFA_TOTP_DIGITS)?,
-            totp_period_secs: parse_opt(ENV_MFA_TOTP_PERIOD_SECS)?,
-            totp_skew_steps: parse_opt(ENV_MFA_TOTP_SKEW_STEPS)?,
-            totp_secret_bytes: parse_opt(ENV_MFA_TOTP_SECRET_BYTES)?,
-            enrollment_ttl_secs: parse_opt(ENV_MFA_ENROLLMENT_TTL_SECS)?,
-            recovery_code_count: parse_opt(ENV_MFA_RECOVERY_CODE_COUNT)?,
-            recovery_code_length: parse_opt(ENV_MFA_RECOVERY_CODE_LENGTH)?,
-            challenge_ttl_secs: parse_opt(ENV_MFA_CHALLENGE_TTL_SECS)?,
-            challenge_max_attempts: parse_opt(ENV_MFA_CHALLENGE_MAX_ATTEMPTS)?,
-            challenge_match: env_str(ENV_MFA_CHALLENGE_MATCH),
-            lockout_threshold: parse_opt(ENV_MFA_LOCKOUT_THRESHOLD)?,
-            lockout_window_secs: parse_opt(ENV_MFA_LOCKOUT_WINDOW_SECS)?,
-            lockout_secs: parse_opt(ENV_MFA_LOCKOUT_SECS)?,
-            code_digits: parse_opt(ENV_MFA_CODE_DIGITS)?,
-            code_ttl_secs: parse_opt(ENV_MFA_CODE_TTL_SECS)?,
-            code_resend_secs: parse_opt(ENV_MFA_CODE_RESEND_SECS)?,
-            code_max_sends: parse_opt(ENV_MFA_CODE_MAX_SENDS)?,
-            auto_send: parse_opt(ENV_MFA_AUTO_SEND)?,
-            end_sessions_on_removal: parse_opt(ENV_MFA_END_SESSIONS_ON_REMOVAL)?,
-            purge_interval_secs: parse_opt(ENV_MFA_PURGE_INTERVAL_SECS)?,
-            purge_retention_secs: parse_opt(ENV_MFA_PURGE_RETENTION_SECS)?,
+            hash_key: str_opt(&s, ENV_MFA_HASH_KEY),
+            totp_issuer: str_opt(&s, ENV_MFA_TOTP_ISSUER),
+            totp_algorithm: str_opt(&s, ENV_MFA_TOTP_ALGORITHM),
+            totp_digits: parse_opt(&s, ENV_MFA_TOTP_DIGITS)?,
+            totp_period_secs: parse_opt(&s, ENV_MFA_TOTP_PERIOD_SECS)?,
+            totp_skew_steps: parse_opt(&s, ENV_MFA_TOTP_SKEW_STEPS)?,
+            totp_secret_bytes: parse_opt(&s, ENV_MFA_TOTP_SECRET_BYTES)?,
+            enrollment_ttl_secs: parse_opt(&s, ENV_MFA_ENROLLMENT_TTL_SECS)?,
+            recovery_code_count: parse_opt(&s, ENV_MFA_RECOVERY_CODE_COUNT)?,
+            recovery_code_length: parse_opt(&s, ENV_MFA_RECOVERY_CODE_LENGTH)?,
+            challenge_ttl_secs: parse_opt(&s, ENV_MFA_CHALLENGE_TTL_SECS)?,
+            challenge_max_attempts: parse_opt(&s, ENV_MFA_CHALLENGE_MAX_ATTEMPTS)?,
+            challenge_match: str_opt(&s, ENV_MFA_CHALLENGE_MATCH),
+            lockout_threshold: parse_opt(&s, ENV_MFA_LOCKOUT_THRESHOLD)?,
+            lockout_window_secs: parse_opt(&s, ENV_MFA_LOCKOUT_WINDOW_SECS)?,
+            lockout_secs: parse_opt(&s, ENV_MFA_LOCKOUT_SECS)?,
+            code_digits: parse_opt(&s, ENV_MFA_CODE_DIGITS)?,
+            code_ttl_secs: parse_opt(&s, ENV_MFA_CODE_TTL_SECS)?,
+            code_resend_secs: parse_opt(&s, ENV_MFA_CODE_RESEND_SECS)?,
+            code_max_sends: parse_opt(&s, ENV_MFA_CODE_MAX_SENDS)?,
+            auto_send: parse_opt(&s, ENV_MFA_AUTO_SEND)?,
+            end_sessions_on_removal: parse_opt(&s, ENV_MFA_END_SESSIONS_ON_REMOVAL)?,
+            purge_interval_secs: parse_opt(&s, ENV_MFA_PURGE_INTERVAL_SECS)?,
+            purge_retention_secs: parse_opt(&s, ENV_MFA_PURGE_RETENTION_SECS)?,
         })
     }
 }
 
-fn env_str(key: &str) -> Option<String> {
-    std::env::var(key).ok().filter(|v| !v.trim().is_empty())
+/// A non-blank value; blank counts as unset.
+fn str_opt(s: &Section, key: &str) -> Option<String> {
+    s.get_non_blank(key).map(|v| v.value)
 }
 
 fn split_list(v: &str) -> Vec<String> {
@@ -101,18 +128,19 @@ fn split_list(v: &str) -> Vec<String> {
         .collect()
 }
 
-fn parse_opt<T>(key: &str) -> Result<Option<T>, ConfigError>
+fn parse_opt<T>(s: &Section, key: &str) -> Result<Option<T>, ConfigError>
 where
     T: std::str::FromStr,
     T::Err: std::fmt::Display,
 {
-    match env_str(key) {
+    match s.get_non_blank(key) {
         None => Ok(None),
-        Some(raw) => raw
+        Some(v) => v
+            .value
             .trim()
             .parse::<T>()
             .map(Some)
-            .map_err(|e| invalid(key, e)),
+            .map_err(|e| invalid(&v.origin, e)),
     }
 }
 

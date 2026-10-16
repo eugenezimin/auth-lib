@@ -4,16 +4,18 @@ version = "0.3.0"
 edition = "2024"
 
 [workspace]
-members = ["adapters/postgres", "adapters/cluster", "adapters/mfa", "adapters/mfa-delivery", "testkit"]
+members = ["adapters/postgres", "adapters/cluster", "adapters/mfa", "adapters/mfa/delivery", "testkit"]
 
 [features]
-default = ["argon2", "crypto", "serde"]
+default = ["argon2", "crypto", "serde", "yaml"]
 # Built-in Argon2id implementation of `credentials::PasswordHasher`.
 argon2 = ["dep:argon2"]
 # Built-in token cryptography: Ed25519 JWT access tokens + HMAC refresh tokens.
 crypto = ["dep:ed25519-dalek", "dep:hmac", "dep:sha2", "dep:serde", "dep:serde_json"]
 # Serialize / Deserialize derives on models and API DTOs.
 serde = ["dep:serde", "uuid/serde", "chrono/serde"]
+# YAML configuration files: `ConfigSource::yaml_file` / `yaml_str`.
+yaml = ["dep:serde", "dep:serde-saphyr"]
 
 [dependencies]
 async-trait = "0.1.89"
@@ -27,6 +29,7 @@ serde_json  = { version = "1", optional = true }
 ed25519-dalek = { version = "3", optional = true }
 hmac        = { version = "0.13", optional = true }
 sha2        = { version = "0.11", optional = true }
+serde-saphyr = { version = "2", optional = true, default-features = false, features = ["deserialize"] }
 
 [dev-dependencies]
 z-auth-testkit = { path = "testkit" }
