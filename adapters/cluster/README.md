@@ -56,6 +56,8 @@ In federation mode it also wraps services. Session stores refuse logins and iden
 
 Each start and tick returns the cluster's report, read with `report.cluster()` from `ClusterReportExt`.
 
+Sessions carry the authentication methods they were opened with (`amr`), and the sync carries them too, so `Authorizer::require_mfa` works on every service. Both login steps (`login` and `complete_login`) belong to the authority in federation mode: session stores refuse them, and the authority publishes the account snapshot once the session is open. With z-auth-mfa, register it on the authority only. Federation protocol version 2 carries `amr`; every service must run it.
+
 ## Storage
 
 The crate ships no database code. `z-auth-postgres` implements `NodeRepository` (feature `shared`) and `SyncStore` (feature `federation`), and keeps the `cluster_` tables in a separate migration set applied by `run_cluster_migrations` or `setup_db --cluster`.
