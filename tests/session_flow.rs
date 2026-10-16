@@ -170,6 +170,7 @@ async fn previous_pair_after_grace_compromises_only_that_session() {
         .authentication()
         .login(credentials("a@example.com"), ctx(IP_B))
         .await
+        .and_then(LoginOutcome::into_tokens)
         .unwrap();
     s.clock.advance(ACCESS_TTL);
     let current = refresh(&s, &first, IP_A).await.unwrap();
@@ -225,6 +226,7 @@ async fn grace_can_match_on_the_client_fingerprint_instead_of_the_ip() {
         .authentication()
         .login(credentials("a@example.com"), device(IP_A))
         .await
+        .and_then(LoginOutcome::into_tokens)
         .unwrap();
     s.clock.advance(ACCESS_TTL);
     let winner = s
@@ -268,6 +270,7 @@ async fn generations_record_who_they_were_issued_to() {
             ctx(IP_A).with_fingerprint("device-123"),
         )
         .await
+        .and_then(LoginOutcome::into_tokens)
         .unwrap();
     s.clock.advance(ACCESS_TTL);
     let second = s
@@ -363,6 +366,7 @@ async fn mixed_or_forged_pairs_are_rejected() {
         .authentication()
         .login(credentials("a@example.com"), ctx(IP_A))
         .await
+        .and_then(LoginOutcome::into_tokens)
         .unwrap();
 
     // Access token of one session with the refresh token of another.
@@ -438,6 +442,7 @@ async fn login_evicts_oldest_session_beyond_limit() {
         .authentication()
         .login(credentials("a@example.com"), ctx(IP_A))
         .await
+        .and_then(LoginOutcome::into_tokens)
         .unwrap();
     s.clock.advance(Duration::from_secs(1));
     let newest = s
@@ -445,6 +450,7 @@ async fn login_evicts_oldest_session_beyond_limit() {
         .authentication()
         .login(credentials("a@example.com"), ctx(IP_A))
         .await
+        .and_then(LoginOutcome::into_tokens)
         .unwrap();
 
     let evicted = session(&s, oldest.session_id).await;
@@ -464,6 +470,7 @@ async fn logout_ends_only_its_own_session() {
         .authentication()
         .login(credentials("a@example.com"), ctx(IP_A))
         .await
+        .and_then(LoginOutcome::into_tokens)
         .unwrap();
 
     assert!(
@@ -498,6 +505,7 @@ async fn logout_all_ends_every_session_but_allows_new_login() {
         .authentication()
         .login(credentials("a@example.com"), ctx(IP_B))
         .await
+        .and_then(LoginOutcome::into_tokens)
         .unwrap();
 
     assert_eq!(
@@ -513,6 +521,7 @@ async fn logout_all_ends_every_session_but_allows_new_login() {
         .authentication()
         .login(credentials("a@example.com"), ctx(IP_A))
         .await
+        .and_then(LoginOutcome::into_tokens)
         .unwrap();
     s.auth
         .verifier()
@@ -579,6 +588,7 @@ async fn login_email_is_case_insensitive() {
         .authentication()
         .login(credentials("  A@Example.COM"), ctx(IP_A))
         .await
+        .and_then(LoginOutcome::into_tokens)
         .expect("login ignores email case");
     assert_eq!(
         s.auth.verifier().verify(&pair.access_token).unwrap().sub,
@@ -612,6 +622,7 @@ async fn password_change_ends_every_session() {
         .authentication()
         .login(credentials("a@example.com"), ctx(IP_B))
         .await
+        .and_then(LoginOutcome::into_tokens)
         .unwrap();
 
     let new_password = "N3wS3cur3P@ss!";
@@ -649,6 +660,7 @@ async fn password_change_ends_every_session() {
             ctx(IP_A),
         )
         .await
+        .and_then(LoginOutcome::into_tokens)
         .expect("login with the new password");
     s.auth.verifier().verify(&fresh.access_token).unwrap();
 }
@@ -719,6 +731,7 @@ async fn long_user_agent_is_truncated_on_a_char_boundary() {
             ClientContext::new(IP_A).with_user_agent("€".repeat(400)),
         )
         .await
+        .and_then(LoginOutcome::into_tokens)
         .unwrap();
     let stored = session(&s, pair.session_id).await.user_agent.unwrap();
     assert_eq!(stored.len(), 510);

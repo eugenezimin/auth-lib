@@ -18,7 +18,7 @@ use z_auth::AuthError;
 use z_auth::ZAuth;
 use z_auth::identity::access::NewRole;
 use z_auth::identity::user::RegisterUser;
-use z_auth::security::authentication::{ClientContext, Credentials, TokenPair};
+use z_auth::security::authentication::{ClientContext, Credentials, LoginOutcome, TokenPair};
 use z_auth::security::authorization::{NewPermission, PermissionKind, PermissionValue};
 
 use crate::helpers::{cleanup_user_by_id, create_test_user, make_service_in, unique_email};
@@ -111,6 +111,7 @@ async fn login(auth: &ZAuth, email: &str) -> TokenPair {
             ClientContext::new(IP),
         )
         .await
+        .and_then(LoginOutcome::into_tokens)
         .unwrap()
 }
 

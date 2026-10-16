@@ -17,7 +17,7 @@
 //! 2. [`assemble`](Extension::assemble), once the shared in-memory state
 //!    (denylist, key ring, catalog) and the revocation, key and permission
 //!    services exist — replace the permission service or the refresh
-//!    account source, install a refresh gate;
+//!    account source, install a refresh gate or a second-factor gate;
 //! 3. [`decorate`](Extension::decorate), once every service exists — wrap
 //!    or replace the public ones.  Later extensions wrap outside earlier
 //!    ones.
@@ -38,7 +38,9 @@ use crate::controller::repositories::Repositories;
 use crate::eventing::EventPublisher;
 use crate::identity::access::RoleService;
 use crate::identity::user::UserService;
-use crate::security::authentication::{AuthenticationService, RefreshAccountSource, RefreshGate};
+use crate::security::authentication::{
+    AuthenticationService, RefreshAccountSource, RefreshGate, SecondFactorGate,
+};
 use crate::security::authorization::{CatalogCache, PermissionRepository, PermissionService};
 use crate::security::token::{
     AccessTokenDecoder, Denylist, KeyRing, TokenRevocationService, TokenVerifier,
@@ -191,12 +193,13 @@ impl CoreHandles {
 }
 
 /// Phase 2: replace the permission service or the refresh account source,
-/// install a refresh gate.
+/// install a refresh gate or a second-factor gate.
 pub struct AssembleContext<'a> {
     pub(crate) core: &'a CoreHandles,
     pub(crate) permissions: Arc<dyn PermissionService>,
     pub(crate) accounts: Arc<dyn RefreshAccountSource>,
     pub(crate) gate: Option<Arc<dyn RefreshGate>>,
+    pub(crate) second_factor: Option<Arc<dyn SecondFactorGate>>,
     pub(crate) load_catalog: bool,
 }
 
@@ -226,6 +229,20 @@ impl AssembleContext<'_> {
             ));
         }
         self.gate = Some(gate);
+        Ok(())
+    }
+    /// Consulted on every login once the password matched; may require a
+    /// second factor.  At most one per instance.
+    pub fn set_second_factor_gate(
+        &mut self,
+        gate: Arc<dyn SecondFactorGate>,
+    ) -> Result<(), AuthError> {
+        if self.second_factor.is_some() {
+            return Err(AuthError::Config(
+                "a second-factor gate is already installed by another extension".into(),
+            ));
+        }
+        self.second_factor = Some(gate);
         Ok(())
     }
     /// Load the permission catalog at start even outside permission modes.

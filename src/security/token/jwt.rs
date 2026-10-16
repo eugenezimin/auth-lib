@@ -61,6 +61,9 @@ struct Payload {
     /// Permission catalog version; present whenever permissions are in use.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pv: Option<u64>,
+    /// Authentication methods (RFC 8176); absent in older tokens.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    amr: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -184,6 +187,7 @@ impl AccessTokenIssuer for Ed25519Issuer {
             rol,
             prm,
             pv,
+            amr: claims.amr.clone(),
         };
         let payload_json = serde_json::to_vec(&payload)
             .map_err(|e| AuthError::TokenCreationError(e.to_string()))?;
@@ -360,6 +364,7 @@ impl AccessTokenDecoder for Ed25519Decoder {
             iat: payload.iat,
             exp: payload.exp,
             authz: authz_from_wire(payload.rol, payload.prm, payload.pv),
+            amr: payload.amr,
         })
     }
 }
@@ -387,7 +392,39 @@ mod tests {
             iat: now.timestamp(),
             exp: now.timestamp() + 300,
             authz: None,
+            amr: vec![],
         }
+    }
+
+    #[test]
+    fn amr_round_trips_and_is_optional_on_the_wire() {
+        let issuer = Ed25519Issuer::new(&SEED).unwrap();
+        let now = Utc::now();
+        let mut c = claims(now);
+        c.amr = vec!["mfa".into(), "otp".into(), "pwd".into()];
+        let token = issuer.mint(&c).unwrap();
+        let payload: serde_json::Value =
+            serde_json::from_slice(&B64URL.decode(token.split('.').nth(1).unwrap()).unwrap())
+                .unwrap();
+        assert_eq!(payload["amr"], serde_json::json!(["mfa", "otp", "pwd"]));
+        let decoded = decoder(&[vk(&SEED)])
+            .decode(&token, now, ExpiryCheck::Enforce)
+            .unwrap();
+        assert_eq!(decoded, c);
+        assert!(decoded.has_amr("otp"));
+
+        // Tokens without `amr` (minted before it existed) decode to empty.
+        c.amr.clear();
+        let token = issuer.mint(&c).unwrap();
+        let payload: serde_json::Value =
+            serde_json::from_slice(&B64URL.decode(token.split('.').nth(1).unwrap()).unwrap())
+                .unwrap();
+        assert!(payload.get("amr").is_none());
+        let decoded = decoder(&[vk(&SEED)])
+            .decode(&token, now, ExpiryCheck::Enforce)
+            .unwrap();
+        assert!(decoded.amr.is_empty());
+        assert!(!decoded.has_amr("pwd"));
     }
 
     #[test]

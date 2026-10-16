@@ -305,6 +305,7 @@ impl SyncStore for PgSyncStore {
                 .bind(s.idle_expires_at)
                 .bind(s.absolute_expires_at)
                 .bind(s.ended_at)
+                .bind(&s.amr)
                 .execute(&mut *tx)
                 .await;
             match inserted {
@@ -321,6 +322,7 @@ impl SyncStore for PgSyncStore {
                 .bind(current_generation)
                 .bind(s.idle_expires_at)
                 .bind(s.ended_at)
+                .bind(&s.amr)
                 .execute(&mut *tx)
                 .await
                 .map_err(map_sqlx_error)?;

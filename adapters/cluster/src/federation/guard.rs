@@ -20,7 +20,9 @@ use z_auth::identity::user::model::{
 use z_auth::identity::user::repository::UserRepository;
 use z_auth::identity::user::service::UserService;
 use z_auth::security::authentication::account::{RefreshAccount, RefreshAccountSource};
-use z_auth::security::authentication::model::{ClientContext, Credentials, TokenPair};
+use z_auth::security::authentication::model::{
+    ClientContext, Credentials, LoginOutcome, SecondFactorProof, TokenPair,
+};
 use z_auth::security::authentication::service::AuthenticationService;
 use z_auth::security::authorization::catalog::CatalogCache;
 use z_auth::security::authorization::model::{
@@ -225,7 +227,8 @@ impl PermissionService for SnapshotPermissions {
     }
 }
 
-/// Login belongs to the authority; everything else is served here.
+/// Login (both steps) belongs to the authority; everything else is served
+/// here.
 pub struct NotAuthorityLogin {
     pub authority: Authority,
     pub inner: Arc<dyn AuthenticationService>,
@@ -233,7 +236,14 @@ pub struct NotAuthorityLogin {
 
 #[async_trait]
 impl AuthenticationService for NotAuthorityLogin {
-    async fn login(&self, _: Credentials, _: ClientContext) -> Result<TokenPair, AuthError> {
+    async fn login(&self, _: Credentials, _: ClientContext) -> Result<LoginOutcome, AuthError> {
+        self.authority.deny()
+    }
+    async fn complete_login(
+        &self,
+        _: SecondFactorProof,
+        _: ClientContext,
+    ) -> Result<TokenPair, AuthError> {
         self.authority.deny()
     }
     async fn refresh(

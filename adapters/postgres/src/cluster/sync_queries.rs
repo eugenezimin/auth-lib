@@ -53,7 +53,7 @@ pub const HEAD: &str = r#"
 // ── sessions ──────────────────────────────────────────────────────────────────
 
 pub const LOAD_SESSION: &str = r#"
-    SELECT id, user_id, secret, status, end_reason, created_ip, user_agent,
+    SELECT id, user_id, secret, status, end_reason, created_ip, user_agent, amr,
            current_generation, created_at, idle_expires_at, absolute_expires_at, ended_at,
            merge_rev
     FROM security_sessions
@@ -82,14 +82,14 @@ pub const LOCK_SESSION_REV: &str =
 pub const INSERT_SESSION_WITH_ID: &str = r#"
     INSERT INTO security_sessions (id, user_id, secret, status, end_reason, created_ip, user_agent,
                           current_generation, created_at, idle_expires_at, absolute_expires_at,
-                          ended_at, merge_rev)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 1)
+                          ended_at, amr, merge_rev)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 1)
 "#;
 
 pub const UPDATE_MERGED_SESSION: &str = r#"
     UPDATE security_sessions
     SET status = $2, end_reason = $3, current_generation = $4, idle_expires_at = $5,
-        ended_at = $6, merge_rev = merge_rev + 1
+        ended_at = $6, amr = $7, merge_rev = merge_rev + 1
     WHERE id = $1
 "#;
 

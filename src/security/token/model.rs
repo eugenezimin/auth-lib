@@ -34,6 +34,19 @@ pub struct Claims {
     pub exp: i64,
     /// Authorization data, present unless `AUTH_AUTHZ_MODE=none`.
     pub authz: Option<AuthzClaims>,
+    /// Authentication methods of the session (RFC 8176 `amr`), sorted —
+    /// e.g. `["mfa", "otp", "pwd"]` after a second factor.  Empty in tokens
+    /// minted before sessions recorded it.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub amr: Vec<String>,
+}
+
+impl Claims {
+    /// Whether the session was opened with authentication method `method`
+    /// (an `amr` value such as `"otp"`).
+    pub fn has_amr(&self, method: &str) -> bool {
+        self.amr.iter().any(|m| m == method)
+    }
 }
 
 /// Authorization data carried by an access token (`rol`, `prm`, `pv`).

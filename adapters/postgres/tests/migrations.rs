@@ -40,14 +40,55 @@ async fn test_cluster_migrations_apply_on_top_of_the_core_set() {
         .expect("the core migrator ignores cluster versions");
 
     let versions: Vec<i64> = sqlx::query_scalar(
-        "SELECT version FROM _sqlx_migrations WHERE success AND version >= 1000 ORDER BY version",
+        "SELECT version FROM _sqlx_migrations
+         WHERE success AND version BETWEEN 1000 AND 1999 ORDER BY version",
     )
     .fetch_all(&pool)
     .await
     .unwrap();
     let embedded: Vec<i64> = CLUSTER_MIGRATOR.iter().map(|m| m.version).collect();
     assert_eq!(versions, embedded);
-    assert!(embedded.iter().all(|v| *v >= 1000));
+    assert!(embedded.iter().all(|v| (1000..2000).contains(v)));
+}
+
+/// The mfa set lives beside the others (versions from 2001); each migrator
+/// leaves the other sets' versions alone.
+#[cfg(feature = "mfa")]
+#[tokio::test]
+async fn test_mfa_migrations_apply_on_top_of_the_core_set() {
+    use z_auth_postgres::{MFA_MIGRATOR, run_mfa_migrations};
+
+    let pool = pool().await;
+    run_mfa_migrations(&pool).await.expect("mfa set applies");
+    run_migrations(&pool)
+        .await
+        .expect("the core migrator ignores mfa versions");
+
+    let versions: Vec<i64> = sqlx::query_scalar(
+        "SELECT version FROM _sqlx_migrations
+         WHERE success AND version BETWEEN 2000 AND 2999 ORDER BY version",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    let embedded: Vec<i64> = MFA_MIGRATOR.iter().map(|m| m.version).collect();
+    assert_eq!(versions, embedded);
+    assert!(embedded.iter().all(|v| (2000..3000).contains(v)));
+
+    let mut types: Vec<String> = sqlx::query_scalar(
+        "SELECT typname::text FROM pg_type
+         WHERE typtype = 'e'
+           AND typnamespace = current_schema()::regnamespace
+           AND typname LIKE 'mfa\\_%'",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    types.sort();
+    assert_eq!(
+        types,
+        ["mfa_factor_status", "mfa_method", "mfa_totp_algorithm"]
+    );
 }
 
 #[tokio::test]

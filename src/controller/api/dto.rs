@@ -61,6 +61,53 @@ pub struct TokenPairResponse {
     pub refresh_expires_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// Response of `POST /login`.
+///
+/// JSON (feature `serde`): `{"status": "authenticated", "session_id": …,
+/// "access_token": …}` or `{"status": "second_factor_required",
+/// "challenge_token": …, "methods": […]}`.
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(tag = "status", rename_all = "snake_case"))]
+pub enum LoginResponse {
+    Authenticated(TokenPairResponse),
+    SecondFactorRequired(LoginChallengeResponse),
+}
+
+/// A login waiting for a second factor: send `challenge_token` and the
+/// code to `POST /login/second-factor`.
+#[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct LoginChallengeResponse {
+    pub challenge_token: String,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+    /// Methods accepted for this challenge, preferred first.
+    pub methods: Vec<String>,
+    /// Set when a code was already sent.
+    pub delivery: Option<ChallengeDeliveryDto>,
+}
+
+#[derive(Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct ChallengeDeliveryDto {
+    /// `email` or `sms`.
+    pub method: String,
+    pub destination_hint: String,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Body of `POST /login/second-factor`.
+#[derive(Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct CompleteLoginRequest {
+    pub challenge_token: String,
+    /// `totp` | `email` | `sms` | `recovery_code`; omit to let the server
+    /// pick.
+    #[cfg_attr(feature = "serde", serde(default))]
+    pub method: Option<String>,
+    pub code: String,
+}
+
 // ── Token revocation ──────────────────────────────────────────────────────────
 
 /// Something to revoke.  Revoking a token ends its whole session.
@@ -181,6 +228,27 @@ impl std::fmt::Debug for TokenPairResponse {
             .field("access_expires_at", &self.access_expires_at)
             .field("refresh_token", &REDACTED)
             .field("refresh_expires_at", &self.refresh_expires_at)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for LoginChallengeResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LoginChallengeResponse")
+            .field("challenge_token", &REDACTED)
+            .field("expires_at", &self.expires_at)
+            .field("methods", &self.methods)
+            .field("delivery", &self.delivery)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for CompleteLoginRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CompleteLoginRequest")
+            .field("challenge_token", &REDACTED)
+            .field("method", &self.method)
+            .field("code", &REDACTED)
             .finish()
     }
 }

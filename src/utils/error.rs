@@ -90,6 +90,10 @@ pub enum AuthError {
     /// A permission value does not fit the permission's kind.
     InvalidPermissionValue(String),
 
+    /// The token's session was not opened with a second factor (its `amr`
+    /// lacks `mfa`), or login needs one that was not supplied.
+    SecondFactorRequired,
+
     // The variants below are raised by extensions (z-auth-cluster) and by
     // the refresh gate / serving fence they install; z-auth alone never
     // produces them.
@@ -99,6 +103,40 @@ pub enum AuthError {
 
     /// A peer could not be reached (returned by host transports).
     ClusterUnreachable(String),
+
+    // Raised by a second-factor extension (z-auth-mfa) through the
+    // `SecondFactorGate` it installs.
+    /// The second-factor code (or recovery code) is wrong or was already
+    /// used.
+    InvalidSecondFactor,
+
+    /// Too many failed second-factor attempts; retry later.
+    SecondFactorLocked,
+
+    /// The login challenge (or enrollment) is unknown, expired, already
+    /// used, or out of attempts.  Log in again.
+    ChallengeExpired,
+
+    /// A second factor is required but the user has none enrolled.
+    SecondFactorNotEnrolled,
+
+    /// The user already has an active factor of this kind.
+    SecondFactorAlreadyEnrolled,
+
+    /// No such factor among the user's.
+    SecondFactorNotFound,
+
+    /// The second-factor method is unknown or not enabled by configuration.
+    UnsupportedSecondFactor(String),
+
+    /// An email address or phone number a code cannot be sent to.
+    InvalidDestination(String),
+
+    /// A one-time code was sent too recently, or too many were sent.
+    CodeResendTooSoon,
+
+    /// The host's code sender failed to deliver a one-time code.
+    CodeDeliveryFailed(String),
 
     /// Federation mode: this operation belongs to the authority service
     /// (UMS).  `addresses` lists authority instances known to this one.
@@ -168,10 +206,31 @@ impl std::fmt::Display for AuthError {
             Self::InvalidPermissionValue(reason) => {
                 write!(f, "invalid permission value: {reason}")
             }
+            Self::SecondFactorRequired => write!(f, "a second authentication factor is required"),
             Self::ClusterMessageRejected(reason) => {
                 write!(f, "cluster message rejected: {reason}")
             }
             Self::ClusterUnreachable(reason) => write!(f, "cluster peer unreachable: {reason}"),
+            Self::InvalidSecondFactor => write!(f, "invalid second-factor code"),
+            Self::SecondFactorLocked => {
+                write!(f, "too many failed second-factor attempts; retry later")
+            }
+            Self::ChallengeExpired => {
+                write!(f, "the challenge expired or was already used; start over")
+            }
+            Self::SecondFactorNotEnrolled => {
+                write!(f, "a second factor is required but none is enrolled")
+            }
+            Self::SecondFactorAlreadyEnrolled => {
+                write!(f, "a second factor of this kind is already enrolled")
+            }
+            Self::SecondFactorNotFound => write!(f, "second factor not found"),
+            Self::UnsupportedSecondFactor(method) => {
+                write!(f, "second-factor method '{method}' is not available")
+            }
+            Self::InvalidDestination(reason) => write!(f, "invalid destination: {reason}"),
+            Self::CodeResendTooSoon => write!(f, "a code was sent too recently; retry later"),
+            Self::CodeDeliveryFailed(reason) => write!(f, "code delivery failed: {reason}"),
             Self::NotAuthority { service, .. } => {
                 write!(f, "this operation is handled by the '{service}' service")
             }

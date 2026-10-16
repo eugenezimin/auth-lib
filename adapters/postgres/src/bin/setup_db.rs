@@ -2,6 +2,7 @@
 //!
 //! Run with:  cargo run -p z-auth-postgres --bin setup_db [-- --reset]
 //! Cluster:   cargo run -p z-auth-postgres --features shared --bin setup_db -- --cluster
+//! 2FA:       cargo run -p z-auth-postgres --features mfa --bin setup_db -- --mfa
 //!
 //! Reads connection details from the environment (a `.env` file in the
 //! current directory is loaded first, if present).  Expected variables:
@@ -14,18 +15,23 @@
 //! 3. Applies pending migrations from `adapters/postgres/migrations`, which
 //!    are embedded at compile time, so the binary runs from any directory.
 //!    With `--cluster` (feature `shared`) it then applies z-auth-cluster's
-//!    set from `migrations_cluster` (versions from 1001).
+//!    set from `migrations_cluster` (versions from 1001), and with `--mfa`
+//!    (feature `mfa`) z-auth-mfa's set from `migrations_mfa` (versions from
+//!    2001).
 //!    A database built with the migrations replaced by the current baseline
 //!    (the old 0001–0008) is refused with a hint to rerun with `--reset`.
 
 use std::collections::HashSet;
 use std::io::{self, Write};
+use std::ops::Range;
 
 use sqlx::PgPool;
 use sqlx::migrate::Migrator;
 use sqlx::postgres::PgPoolOptions;
 #[cfg(feature = "shared")]
 use z_auth_postgres::CLUSTER_MIGRATOR;
+#[cfg(feature = "mfa")]
+use z_auth_postgres::MFA_MIGRATOR;
 use z_auth_postgres::{MIGRATOR, PgConfig, constants::ADMIN_DB_NAME, pool::connect_options};
 
 /// Every table z-auth has ever created: the current schema, the names
@@ -33,6 +39,10 @@ use z_auth_postgres::{MIGRATOR, PgConfig, constants::ADMIN_DB_NAME, pool::connec
 /// from pre-migration databases.
 const MANAGED_TABLES: &[&str] = &[
     // current schema
+    "mfa_challenges",
+    "mfa_recovery_codes",
+    "mfa_factors",
+    "mfa_user_state",
     "cluster_sync_freshness",
     "cluster_feed_cursors",
     "cluster_change_feed",
@@ -86,6 +96,9 @@ const MANAGED_TYPES: &[&str] = &[
     "node_state",
     "heartbeat_status",
     "verifying_key_status",
+    "mfa_method",
+    "mfa_factor_status",
+    "mfa_totp_algorithm",
     "node_status",
 ];
 
@@ -110,8 +123,11 @@ const MANAGED_FUNCTIONS: &[&str] = &[
 /// sqlx's bookkeeping table.
 const MIGRATIONS_TABLE: &str = "_sqlx_migrations";
 
-/// The cluster set's versions start here (`migrations_cluster/`).
-const CLUSTER_VERSIONS_FROM: i64 = 1000;
+/// The cluster set's versions (`migrations_cluster/`).
+const CLUSTER_VERSIONS: Range<i64> = 1000..2000;
+/// The mfa set's versions (`migrations_mfa/`).
+#[cfg_attr(not(feature = "mfa"), allow(dead_code))]
+const MFA_VERSIONS: Range<i64> = 2000..3000;
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
@@ -133,6 +149,14 @@ async fn main() {
         fatal(
             "--cluster needs the `shared` feature:\n    → cargo run -p z-auth-postgres \
              --features shared --bin setup_db -- --cluster",
+        );
+    }
+    let mfa = std::env::args().any(|a| a == "--mfa");
+    #[cfg(not(feature = "mfa"))]
+    if mfa {
+        fatal(
+            "--mfa needs the `mfa` feature:\n    → cargo run -p z-auth-postgres \
+             --features mfa --bin setup_db -- --mfa",
         );
     }
     let cfg = PgConfig::from_env().unwrap_or_else(|e| fatal(&e));
@@ -174,12 +198,17 @@ async fn main() {
     }
     println!();
 
-    // 7. Apply pending migrations: core, then (with --cluster) the cluster set
+    // 7. Apply pending migrations: core, then (with --cluster / --mfa) the
+    //    cluster and mfa sets
     check_baseline(&pool).await;
     apply_migrations(&pool, &MIGRATOR, "core").await;
     #[cfg(feature = "shared")]
     if cluster {
         apply_migrations(&pool, &CLUSTER_MIGRATOR, "cluster").await;
+    }
+    #[cfg(feature = "mfa")]
+    if mfa {
+        apply_migrations(&pool, &MFA_MIGRATOR, "mfa").await;
     }
 
     println!();
@@ -377,12 +406,14 @@ async fn drop_schema(pool: &PgPool) {
     }
 }
 
-/// Every migration this binary knows, from every set compiled in.
-fn known_migrators() -> Vec<&'static Migrator> {
+/// Every migration set compiled in, with the versions it owns.
+fn known_migrators() -> Vec<(Range<i64>, &'static Migrator)> {
     #[allow(unused_mut)]
-    let mut sets = vec![&MIGRATOR];
+    let mut sets = vec![(0..CLUSTER_VERSIONS.start, &MIGRATOR)];
     #[cfg(feature = "shared")]
-    sets.push(&CLUSTER_MIGRATOR);
+    sets.push((CLUSTER_VERSIONS, &CLUSTER_MIGRATOR));
+    #[cfg(feature = "mfa")]
+    sets.push((MFA_VERSIONS, &MFA_MIGRATOR));
     sets
 }
 
@@ -398,18 +429,18 @@ async fn applied_migrations(pool: &PgPool) -> Vec<(i64, Vec<u8>)> {
 }
 
 /// Applied migrations that are unknown or changed mean the database was
-/// built with the migrations the current baseline replaced.  Cluster
-/// versions are only checked when this binary knows the cluster set.
+/// built with the migrations the current baseline replaced.  A set's
+/// versions are only checked when this binary knows that set.
 async fn check_baseline(pool: &PgPool) {
     let sets = known_migrators();
-    let cluster_known = sets.len() > 1;
     let replaced = applied_migrations(pool)
         .await
         .iter()
-        .filter(|(version, _)| cluster_known || *version < CLUSTER_VERSIONS_FROM)
         .any(|(version, checksum)| {
-            sets.iter()
-                .flat_map(|set| set.iter())
+            let Some((_, set)) = sets.iter().find(|(range, _)| range.contains(version)) else {
+                return false; // a set this binary was built without
+            };
+            set.iter()
                 .find(|m| m.version == *version && !m.migration_type.is_down_migration())
                 .is_none_or(|m| m.checksum.as_ref() != checksum.as_slice())
         });

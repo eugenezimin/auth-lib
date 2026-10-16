@@ -33,3 +33,5 @@ pub const CONSTRAINT_IDENTITY_ROLES_NAME: &str = "identity_roles_name_key";
 pub const CONSTRAINT_IDENTITY_ROLES_CODE: &str = "identity_roles_code_key";
 pub const CONSTRAINT_SECURITY_PERMISSIONS_CODE: &str = "security_permissions_code_key";
 pub const CONSTRAINT_USER_ROLE_ACTIVE: &str = "unique_user_role_active";
+/// See migrations_mfa/2001_mfa_schema.sql.
+pub const CONSTRAINT_MFA_FACTORS_ACTIVE: &str = "uq_mfa_factors_user_method_active";

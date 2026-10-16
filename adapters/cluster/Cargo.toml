@@ -1,6 +1,6 @@
 [package]
 name = "z-auth-cluster"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "Optional clustering for z-auth: shared mode and federation mode"
 

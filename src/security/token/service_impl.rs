@@ -109,7 +109,8 @@ fn status_for(reason: RevocationReason) -> SessionStatus {
         | RevocationReason::PasswordChanged
         | RevocationReason::AccountDisabled
         | RevocationReason::AccountDeleted
-        | RevocationReason::ConcurrentRefresh => SessionStatus::Revoked,
+        | RevocationReason::ConcurrentRefresh
+        | RevocationReason::SecondFactorChanged => SessionStatus::Revoked,
     }
 }
 

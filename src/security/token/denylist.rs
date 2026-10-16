@@ -238,6 +238,7 @@ mod tests {
             iat,
             exp: iat + 300,
             authz: None,
+            amr: vec![],
         }
     }
 

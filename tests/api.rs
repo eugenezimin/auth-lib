@@ -6,7 +6,7 @@ mod support;
 
 use z_auth::conf::constants::*;
 use z_auth::controller::api::dto::{
-    LoginRequest, RefreshRequest, RegisterRequest, RevokeRequest, RevokeTargetDto,
+    LoginRequest, LoginResponse, RefreshRequest, RegisterRequest, RevokeRequest, RevokeTargetDto,
 };
 use z_auth::controller::api::{ApiError, handlers};
 use z_auth::prelude::*;
@@ -84,7 +84,7 @@ async fn test_login_refresh_logout_all_handlers() {
     let auth = make_auth();
     let (_, _) = register_and_login(&auth, "flow@example.com", IP_A).await;
 
-    let pair = handlers::login(
+    let LoginResponse::Authenticated(pair) = handlers::login(
         auth.authentication(),
         LoginRequest {
             email: "flow@example.com".into(),
@@ -93,7 +93,9 @@ async fn test_login_refresh_logout_all_handlers() {
         ctx(IP_A),
     )
     .await
-    .unwrap();
+    .unwrap() else {
+        panic!("no second factor is configured");
+    };
 
     let next = handlers::refresh(
         auth.authentication(),

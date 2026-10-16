@@ -1,6 +1,6 @@
 [package]
 name = "z-auth-postgres"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 description = "Reference PostgreSQL adapter for z-auth (sqlx)"
 
@@ -10,6 +10,8 @@ default = []
 shared = ["dep:z-auth-cluster", "z-auth-cluster/shared"]
 # z-auth-cluster federation mode: the sync store and the session-store schema.
 federation = ["shared", "z-auth-cluster/federation"]
+# z-auth-mfa: the second-factor store and its migration set.
+mfa = ["dep:z-auth-mfa"]
 
 [[bin]]
 name = "setup_db"
@@ -18,6 +20,7 @@ path = "src/bin/setup_db.rs"
 [dependencies]
 z-auth    = { path = "../.." }
 z-auth-cluster = { path = "../cluster", default-features = false, optional = true }
+z-auth-mfa  = { path = "../mfa", default-features = false, optional = true }
 async-trait = "0.1.89"
 sqlx        = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "uuid", "chrono", "macros", "ipnet", "migrate", "json"] }
 serde_json  = "1"
@@ -27,6 +30,8 @@ tokio       = { version = "1", features = ["macros", "rt-multi-thread"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+# The built-in sealer for the end-to-end mfa tests.
+z-auth-mfa = { path = "../mfa" }
 
 [[test]]
 name = "node_registry"
@@ -39,3 +44,7 @@ required-features = ["federation"]
 [[test]]
 name = "federation"
 required-features = ["federation"]
+
+[[test]]
+name = "mfa"
+required-features = ["mfa"]

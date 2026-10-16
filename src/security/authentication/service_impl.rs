@@ -16,14 +16,18 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::conf::config::AuthConfig;
-use crate::conf::constants::{REFRESH_ROTATE_ATTEMPTS, SESSION_SECRET_LEN};
+use crate::conf::constants::{AMR_MFA, AMR_PWD, REFRESH_ROTATE_ATTEMPTS, SESSION_SECRET_LEN};
 use crate::identity::credentials::PasswordHasher;
+use crate::identity::user::model::UserWithRoles;
 use crate::identity::user::normalize_email;
 use crate::identity::user::repository::UserRepository;
 use crate::security::authentication::account::RefreshAccountSource;
 use crate::security::authentication::gate::RefreshGate;
-use crate::security::authentication::model::{ClientContext, Credentials, TokenPair};
+use crate::security::authentication::model::{
+    ClientContext, Credentials, LoginOutcome, SecondFactorProof, TokenPair,
+};
 use crate::security::authentication::policy::{RefreshDecision, RefreshInput, evaluate_refresh};
+use crate::security::authentication::second_factor::{SecondFactorDecision, SecondFactorGate};
 use crate::security::authentication::service::AuthenticationService;
 use crate::security::authorization::service::AuthzClaimsProvider;
 use crate::security::session::{
@@ -57,6 +61,8 @@ pub struct AuthenticationServiceImpl {
     config: AuthConfig,
     /// Installed by an extension (e.g. a federated session store).
     gate: Option<Arc<dyn RefreshGate>>,
+    /// Installed by an extension (e.g. z-auth-mfa).
+    second_factor: Option<Arc<dyn SecondFactorGate>>,
 }
 
 impl AuthenticationServiceImpl {
@@ -92,6 +98,7 @@ impl AuthenticationServiceImpl {
             lifetimes: SessionLifetimes::from_config(&config),
             config,
             gate: None,
+            second_factor: None,
         }
     }
 
@@ -100,6 +107,47 @@ impl AuthenticationServiceImpl {
     pub fn with_gate(mut self, gate: Arc<dyn RefreshGate>) -> Self {
         self.gate = Some(gate);
         self
+    }
+
+    /// Consult `gate` on every login once the password matched: it may ask
+    /// for a second factor, verified by
+    /// [`complete_login`](AuthenticationService::complete_login).
+    pub fn with_second_factor(mut self, gate: Arc<dyn SecondFactorGate>) -> Self {
+        self.second_factor = Some(gate);
+        self
+    }
+
+    /// Open a session for an authenticated account and issue its first
+    /// pair.  `amr` is stored sorted.
+    async fn open_session(
+        &self,
+        account: &UserWithRoles,
+        mut amr: Vec<String>,
+        ctx: &ClientContext,
+    ) -> Result<TokenPair, AuthError> {
+        amr.sort();
+        amr.dedup();
+        let user_id = account.user.id;
+        let authz = self.authz.claims_for(account).await?;
+        self.enforce_session_limit(user_id).await?;
+
+        let issued = ctx.issue_context(None);
+        let (session, first) = self
+            .sessions
+            .create(
+                NewSession {
+                    user_id,
+                    secret: random_bytes(SESSION_SECRET_LEN)?,
+                    created_ip: issued.ip,
+                    user_agent: issued.user_agent,
+                    fingerprint_hash: issued.fingerprint_hash,
+                    amr,
+                },
+                &self.lifetimes,
+            )
+            .await?;
+
+        self.token_pair(&session, &first, authz)
     }
 
     /// Mint the (deterministic) token pair of one generation.
@@ -127,6 +175,7 @@ impl AuthenticationServiceImpl {
             iat: generation.issued_at.timestamp(),
             exp: generation.access_expires_at.timestamp(),
             authz,
+            amr: session.amr.clone(),
         };
         Ok(TokenPair {
             session_id: session.id,
@@ -165,7 +214,7 @@ impl AuthenticationService for AuthenticationServiceImpl {
         &self,
         credentials: Credentials,
         ctx: ClientContext,
-    ) -> Result<TokenPair, AuthError> {
+    ) -> Result<LoginOutcome, AuthError> {
         // One read: the account plus its active roles (for the token).
         let account = self
             .users
@@ -183,26 +232,42 @@ impl AuthenticationService for AuthenticationServiceImpl {
         if !user.is_active {
             return Err(AuthError::AccountDisabled);
         }
+        // Before any session exists, so a password alone evicts nothing.
+        if let Some(gate) = &self.second_factor
+            && let SecondFactorDecision::Challenge(challenge) =
+                gate.on_password_verified(&account, &ctx).await?
+        {
+            return Ok(LoginOutcome::SecondFactor(challenge));
+        }
 
-        let authz = self.authz.claims_for(&account).await?;
-        self.enforce_session_limit(user.id).await?;
-
-        let issued = ctx.issue_context(None);
-        let (session, first) = self
-            .sessions
-            .create(
-                NewSession {
-                    user_id: user.id,
-                    secret: random_bytes(SESSION_SECRET_LEN)?,
-                    created_ip: issued.ip,
-                    user_agent: issued.user_agent,
-                    fingerprint_hash: issued.fingerprint_hash,
-                },
-                &self.lifetimes,
-            )
+        let pair = self
+            .open_session(&account, vec![AMR_PWD.to_string()], &ctx)
             .await?;
+        Ok(LoginOutcome::Tokens(pair))
+    }
 
-        self.token_pair(&session, &first, authz)
+    async fn complete_login(
+        &self,
+        proof: SecondFactorProof,
+        ctx: ClientContext,
+    ) -> Result<TokenPair, AuthError> {
+        let gate = self
+            .second_factor
+            .as_ref()
+            .ok_or_else(|| AuthError::InvalidToken("no second factor is expected".into()))?;
+        let verified = gate.verify(&proof, &ctx).await?;
+        // Re-read the account: it may have changed since the password step.
+        let account = self
+            .users
+            .find_with_roles_by_id(verified.user_id)
+            .await?
+            .ok_or(AuthError::InvalidCredentials)?;
+        if !account.user.is_active {
+            return Err(AuthError::AccountDisabled);
+        }
+        let mut amr = verified.amr;
+        amr.extend([AMR_PWD.to_string(), AMR_MFA.to_string()]);
+        self.open_session(&account, amr, &ctx).await
     }
 
     async fn refresh(

@@ -10,6 +10,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use uuid::Uuid;
 
+use crate::conf::constants::AMR_MFA;
 use crate::identity::user::model::UserWithRoles;
 use crate::security::authorization::model::{
     EffectivePermissions, GrantView, NewPermission, Permission, PermissionCatalog, PermissionValue,
@@ -78,6 +79,22 @@ pub trait Authorizer: Send + Sync {
     fn has_role(&self, claims: &Claims, role_code: &str) -> bool;
     /// The token's permissions, decoded.
     fn permissions(&self, claims: &Claims) -> EffectivePermissions;
+
+    /// Whether the token's session was opened with authentication method
+    /// `method` (an RFC 8176 `amr` value such as `"otp"`).
+    fn has_amr(&self, claims: &Claims, method: &str) -> bool {
+        claims.has_amr(method)
+    }
+
+    /// Fail with [`AuthError::SecondFactorRequired`] unless the token's
+    /// session passed a second factor.  For sensitive operations.
+    fn require_mfa(&self, claims: &Claims) -> Result<(), AuthError> {
+        if claims.has_amr(AMR_MFA) {
+            Ok(())
+        } else {
+            Err(AuthError::SecondFactorRequired)
+        }
+    }
 }
 
 /// Builds the authorization claims of a token being minted.

@@ -1,0 +1,34 @@
+[package]
+name = "z-auth-mfa"
+version = "0.3.0"
+edition = "2024"
+description = "Two-factor authentication for z-auth: TOTP, recovery codes, email and SMS codes"
+
+[features]
+default = ["aead"]
+# Built-in XChaCha20-Poly1305 sealing of TOTP secrets and destinations.
+# Without it the host supplies a `SecretSealer` (e.g. backed by a KMS).
+aead = ["dep:chacha20poly1305"]
+
+[dependencies]
+z-auth      = { path = "../..", default-features = false, features = ["crypto", "serde"] }
+async-trait = "0.1.89"
+uuid        = { version = "1", features = ["v4", "serde"] }
+chrono      = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
+getrandom   = "0.4"
+base64      = "0.23"
+serde       = { version = "1", features = ["derive"] }
+hmac        = "0.13"
+sha1        = "0.11"
+sha2        = "0.11"
+subtle      = "2"
+chacha20poly1305 = { version = "0.11", default-features = false, features = ["alloc"], optional = true }
+
+[dev-dependencies]
+z-auth         = { path = "../..", features = ["argon2", "crypto", "serde"] }
+z-auth-testkit = { path = "../../testkit", features = ["mfa"] }
+tokio          = { version = "1", features = ["macros", "rt-multi-thread"] }
+serde_json     = "1"
+
+[[example]]
+name = "mfa_keygen"

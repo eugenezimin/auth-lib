@@ -98,6 +98,7 @@ async fn rbac_tokens_carry_role_codes_and_pick_up_changes_on_refresh() {
         .authentication()
         .login(credentials("a@example.com"), ctx(IP_A))
         .await
+        .and_then(LoginOutcome::into_tokens)
         .unwrap();
     let c = claims(&s, &pair);
     let authz = s.auth.authorizer();
@@ -156,6 +157,7 @@ async fn verification_and_checks_make_no_repository_calls() {
             .authentication()
             .login(credentials("a@example.com"), ctx(IP_A))
             .await
+            .and_then(LoginOutcome::into_tokens)
             .unwrap(),
     )
     .await;
@@ -208,6 +210,7 @@ async fn permission_tokens_decode_with_the_catalog() {
         .authentication()
         .login(credentials("a@example.com"), ctx(IP_A))
         .await
+        .and_then(LoginOutcome::into_tokens)
         .unwrap();
     let c = claims(&s, &pair);
     let encoded = c.authz.as_ref().unwrap().permissions.as_ref().unwrap();
@@ -299,6 +302,7 @@ async fn login_refreshes_a_stale_catalog_cache_and_verify_only_instances_fail_cl
         .authentication()
         .login(credentials("a@example.com"), ctx(IP_A))
         .await
+        .and_then(LoginOutcome::into_tokens)
         .unwrap();
     let c = claims(&issuer, &pair);
     assert!(
@@ -389,6 +393,7 @@ async fn combined_merges_role_and_direct_grants() {
         .authentication()
         .login(credentials("a@example.com"), ctx(IP_A))
         .await
+        .and_then(LoginOutcome::into_tokens)
         .unwrap();
     let c = claims(&s, &pair);
     let authz = s.auth.authorizer();
@@ -559,4 +564,21 @@ async fn grant_listing_follows_the_mode() {
         s.auth.permissions().user_grants(uuid::Uuid::new_v4()).await,
         Err(AuthError::AuthzModeDisabled(_))
     ));
+}
+
+#[tokio::test]
+async fn password_sessions_carry_pwd_and_fail_require_mfa() {
+    let s = server(config("rbac"));
+    let (_, pair) = register_and_login(&s.auth, "amr@example.com", IP_A).await;
+    let c = claims(&s, &pair);
+    assert_eq!(c.amr, ["pwd"]);
+    assert!(s.auth.authorizer().has_amr(&c, "pwd"));
+    assert!(matches!(
+        s.auth.authorizer().require_mfa(&c),
+        Err(AuthError::SecondFactorRequired)
+    ));
+    // Refresh keeps the session's methods.
+    s.clock.advance(std::time::Duration::from_secs(301));
+    let next = refresh(&s, &pair).await;
+    assert_eq!(claims(&s, &next).amr, ["pwd"]);
 }

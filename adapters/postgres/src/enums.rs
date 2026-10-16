@@ -51,6 +51,7 @@ pub(crate) enum PgRevocationReason {
     AccountDeleted,
     RevokedTokenUsed,
     ConcurrentRefresh,
+    SecondFactorChanged,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, sqlx::Type)]
@@ -102,6 +103,7 @@ impl From<RevocationReason> for PgRevocationReason {
             RevocationReason::AccountDeleted => Self::AccountDeleted,
             RevocationReason::RevokedTokenUsed => Self::RevokedTokenUsed,
             RevocationReason::ConcurrentRefresh => Self::ConcurrentRefresh,
+            RevocationReason::SecondFactorChanged => Self::SecondFactorChanged,
         }
     }
 }
@@ -121,6 +123,7 @@ impl From<PgRevocationReason> for RevocationReason {
             PgRevocationReason::AccountDeleted => Self::AccountDeleted,
             PgRevocationReason::RevokedTokenUsed => Self::RevokedTokenUsed,
             PgRevocationReason::ConcurrentRefresh => Self::ConcurrentRefresh,
+            PgRevocationReason::SecondFactorChanged => Self::SecondFactorChanged,
         }
     }
 }

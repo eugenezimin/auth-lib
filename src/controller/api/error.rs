@@ -72,6 +72,31 @@ impl From<AuthError> for ApiError {
             InvalidPermissionValue(_) => {
                 Self::client(HTTP_UNPROCESSABLE_ENTITY, "invalid_permission_value", &err)
             }
+            SecondFactorRequired => Self::client(HTTP_FORBIDDEN, "second_factor_required", &err),
+            InvalidSecondFactor => Self::client(HTTP_UNAUTHORIZED, "invalid_second_factor", &err),
+            SecondFactorLocked => {
+                Self::client(HTTP_TOO_MANY_REQUESTS, "second_factor_locked", &err)
+            }
+            ChallengeExpired => Self::client(HTTP_UNAUTHORIZED, "challenge_expired", &err),
+            SecondFactorNotEnrolled => {
+                Self::client(HTTP_FORBIDDEN, "second_factor_not_enrolled", &err)
+            }
+            SecondFactorAlreadyEnrolled => {
+                Self::client(HTTP_CONFLICT, "second_factor_already_enrolled", &err)
+            }
+            SecondFactorNotFound => Self::client(HTTP_NOT_FOUND, "second_factor_not_found", &err),
+            UnsupportedSecondFactor(_) => {
+                Self::client(HTTP_UNPROCESSABLE_ENTITY, "unsupported_second_factor", &err)
+            }
+            InvalidDestination(_) => {
+                Self::client(HTTP_UNPROCESSABLE_ENTITY, "invalid_destination", &err)
+            }
+            CodeResendTooSoon => Self::client(HTTP_TOO_MANY_REQUESTS, "code_resend_too_soon", &err),
+            CodeDeliveryFailed(_) => Self {
+                status: HTTP_SERVICE_UNAVAILABLE,
+                code: "code_delivery_failed",
+                message: "the code could not be delivered; retry later".into(),
+            },
             ClusterMessageRejected(_) => {
                 Self::client(HTTP_UNAUTHORIZED, "cluster_message_rejected", &err)
             }

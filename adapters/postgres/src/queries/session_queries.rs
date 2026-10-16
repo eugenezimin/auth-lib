@@ -8,17 +8,17 @@
 
 pub const INSERT_SESSION: &str = r#"
     INSERT INTO security_sessions (
-        user_id, secret, created_ip, user_agent, idle_expires_at, absolute_expires_at
+        user_id, secret, created_ip, user_agent, idle_expires_at, absolute_expires_at, amr
     )
-    VALUES ($1, $2, $3, $4, now() + $5, now() + $6)
+    VALUES ($1, $2, $3, $4, now() + $5, now() + $6, $7)
     RETURNING
-        id, user_id, secret, status, end_reason, created_ip, user_agent,
+        id, user_id, secret, status, end_reason, created_ip, user_agent, amr,
         current_generation, created_at, idle_expires_at, absolute_expires_at, ended_at
 "#;
 
 pub const FIND_SESSION: &str = r#"
     SELECT
-        id, user_id, secret, status, end_reason, created_ip, user_agent,
+        id, user_id, secret, status, end_reason, created_ip, user_agent, amr,
         current_generation, created_at, idle_expires_at, absolute_expires_at, ended_at
     FROM security_sessions
     WHERE id = $1
@@ -28,7 +28,7 @@ pub const FIND_SESSION: &str = r#"
 /// in one round trip.
 pub const LOAD_FOR_REFRESH: &str = r#"
     SELECT
-        s.id, s.user_id, s.secret, s.status, s.end_reason, s.created_ip, s.user_agent,
+        s.id, s.user_id, s.secret, s.status, s.end_reason, s.created_ip, s.user_agent, s.amr,
         s.current_generation, s.created_at, s.idle_expires_at, s.absolute_expires_at,
         s.ended_at,
         now()               AS db_now,
@@ -68,7 +68,7 @@ pub const LOAD_FOR_REFRESH: &str = r#"
 /// Uses the partial index `idx_sessions_user_active`.
 pub const LIST_ACTIVE_FOR_USER: &str = r#"
     SELECT
-        id, user_id, secret, status, end_reason, created_ip, user_agent,
+        id, user_id, secret, status, end_reason, created_ip, user_agent, amr,
         current_generation, created_at, idle_expires_at, absolute_expires_at, ended_at
     FROM security_sessions
     WHERE user_id = $1
@@ -91,7 +91,7 @@ pub const ADVANCE_SESSION: &str = r#"
       AND current_generation = $2
       AND status = 'active'
     RETURNING
-        id, user_id, secret, status, end_reason, created_ip, user_agent,
+        id, user_id, secret, status, end_reason, created_ip, user_agent, amr,
         current_generation, created_at, idle_expires_at, absolute_expires_at, ended_at
 "#;
 

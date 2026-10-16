@@ -71,7 +71,7 @@ pub const DEFAULT_FORK_WINDOW_MS: u64 = 5_000;
 pub const DEFAULT_FORK_MAX_BENIGN: u32 = 1;
 pub const DEFAULT_FORK_BUDGET_WINDOW_SECS: u64 = 3_600;
 /// Wire protocol version of federation mode; peers must match.
-pub const FEDERATION_PROTOCOL_VERSION: u16 = 1;
+pub const FEDERATION_PROTOCOL_VERSION: u16 = 2;
 /// How many times a session merge retries after losing its CAS.
 pub const FEDERATION_MERGE_ATTEMPTS: u32 = 5;
 

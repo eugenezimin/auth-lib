@@ -69,6 +69,9 @@ pub struct SyncSession {
     pub end_reason: Option<RevocationReason>,
     pub created_ip: IpAddr,
     pub user_agent: Option<String>,
+    /// Authentication methods the session was opened with (`amr`).
+    #[serde(default)]
+    pub amr: Vec<String>,
     pub current_generation: u32,
     pub created_at: DateTime<Utc>,
     pub idle_expires_at: DateTime<Utc>,
@@ -84,6 +87,7 @@ impl std::fmt::Debug for SyncSession {
             .field("secret", &"<redacted>")
             .field("status", &self.status)
             .field("end_reason", &self.end_reason)
+            .field("amr", &self.amr)
             .field("current_generation", &self.current_generation)
             .field("idle_expires_at", &self.idle_expires_at)
             .field("ended_at", &self.ended_at)
@@ -160,6 +164,7 @@ impl SessionAggregate {
                 end_reason: session.end_reason,
                 created_ip: session.created_ip,
                 user_agent: session.user_agent.clone(),
+                amr: session.amr.clone(),
                 current_generation: session.current_generation,
                 created_at: session.created_at,
                 idle_expires_at: session.idle_expires_at,
@@ -180,6 +185,7 @@ impl SessionAggregate {
             end_reason: s.end_reason,
             created_ip: s.created_ip,
             user_agent: s.user_agent.clone(),
+            amr: s.amr.clone(),
             current_generation: s.current_generation,
             created_at: s.created_at,
             idle_expires_at: s.idle_expires_at,
