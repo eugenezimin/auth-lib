@@ -1,135 +1,133 @@
-# z-auth-mfa — two-factor authentication for z-auth
+# z-auth-mfa
 
-`z-auth` verifies passwords. This crate adds a second factor: the service application imports it and plugs it into `ZAuth` through z-auth's `Extension` port. Everything is configured through `AUTH_MFA_*` variables (or a `RawMfaConfig`), separate from z-auth's own settings.
+`z-auth` verifies passwords and manages the sessions that follow. `z-auth-mfa` adds a second factor on top of that. The host application imports the crate, builds an `Mfa` value and registers it with `ZAuth` through the core's `Extension` port, so the core never depends on this crate and a service that does not need two-factor authentication pays nothing for it. Everything the crate needs is configured through its own `AUTH_MFA_*` environment variables, or through a `RawMfaConfig` filled in by code, and is kept separate from the core's `AuthConfig`.
 
-Supported factors:
+Once registered, the extension changes what a login returns. A user who has enrolled a factor no longer receives tokens for a correct password. The password step yields a short-lived challenge instead, and the session is opened only when the client answers that challenge with a valid code. Sessions opened this way carry `mfa` in their `amr` claim, which lets the host guard sensitive routes with `Authorizer::require_mfa`. Enrollment, factor management and recovery codes are offered through the `MfaService` trait and a set of framework-agnostic HTTP handlers.
 
-- **TOTP**: authenticator apps (RFC 6238; SHA-1, SHA-256 or SHA-512; 6–8 digits).
-- **Email and SMS codes**: z-auth-mfa generates and checks them, and the host's `CodeSender` delivers them. [z-auth-mfa-delivery](../mfa-delivery/README.md) provides senders for SMTP, SendGrid, Postmark, Mailgun, Twilio and a signed webhook.
-- **Recovery codes**: issued with a user's first factor, each usable once.
+## Second factors
+
+Three families of second factor are supported, and the host chooses which of them are enabled with `AUTH_MFA_METHODS`, listed in order of preference.
+
+Time-based one-time passwords follow RFC 6238 and work with any authenticator app. The crate generates a random shared secret, shows it to the user as an `otpauth://` URI for a QR code, and from then on verifies six to eight digit codes computed with HMAC-SHA-1, HMAC-SHA-256 or HMAC-SHA-512. The secret is sealed before it is stored, and every time step is accepted at most once, so a code observed over someone's shoulder cannot be replayed.
+
+Email and SMS codes are generated, hashed and checked by this crate, but delivering them is the host's job. The host implements the `CodeSender` trait with its mail or SMS provider, or takes a ready-made one from [z-auth-mfa-delivery](../mfa-delivery/README.md), which covers SMTP, SendGrid, Postmark, Mailgun, Twilio and a signed webhook, and hands it to `Mfa::with_code_sender`. This crate never talks to a provider itself and never stores a code in clear. Email and SMS destinations are sealed like TOTP secrets, and only a masked hint such as `j*******@example.com` is kept readable.
+
+Recovery codes are the fallback for a lost phone. A set of single-use codes is issued together with the user's first factor, shown once, and stored only as keyed hashes. A recovery code completes a login exactly like a TOTP code does, and a new set can be generated at any time with a fresh proof.
+
+## How the extension plugs in
+
+`Mfa` is the extension value. During `ZAuthBuilder::build` it checks its own setup, constructs an `MfaServiceImpl` from the core's user repository, revocation service and clock, and installs that service as the core's `SecondFactorGate` unless enforcement is `off`. The same object then serves both roles. As the gate it is consulted by `login` and `complete_login`, and as the `MfaService` it handles enrollment and factor management.
+
+```mermaid
+flowchart LR
+    Host["Host application"] -->|"Mfa::new(settings, repo)"| Mfa
+    Host -->|"with_code_sender / with_sealer"| Mfa
+    Mfa -->|"registered with .extension()"| Builder["ZAuthBuilder::build"]
+    Builder -->|"assemble phase"| Svc["MfaServiceImpl"]
+    Svc -->|"set_second_factor_gate"| Auth["AuthenticationService (core)"]
+    Svc --> Repo["MfaRepository (e.g. PgMfaRepository)"]
+    Svc --> Sender["CodeSender (host or z-auth-mfa-delivery)"]
+    Svc --> Sealer["SecretSealer (XChaChaSealer or custom)"]
+    Svc --> Users["UserRepository (core)"]
+    Svc --> Revocation["TokenRevocationService (core)"]
+    Host -->|"mfa.service()"| Svc
+```
+
+The repository holds factors, recovery codes, login challenges and lockout counters. The sender delivers email and SMS codes. The sealer encrypts the two kinds of secret that must be read back later, TOTP secrets and delivery destinations. The core's user repository supplies the account's email address and roles, and its revocation service ends sessions when a factor is removed.
 
 ## Wiring
 
+The extension is built from validated settings and a repository, optionally given a code sender and a custom sealer, and registered on the builder. The sketch below uses the PostgreSQL adapter's `PgMfaRepository`; any `MfaRepository` works the same way.
+
 ```rust
 use std::sync::Arc;
-use z_auth::{ZAuth, conf::config::{ConfigLoader, EnvLoader}};
-use z_auth_mfa::{Mfa, config::{MfaConfigLoader, MfaEnvLoader}};
 
-let mfa = Arc::new(
-    Mfa::new(
-        MfaEnvLoader.load_settings()?,                        // AUTH_MFA_*
-        Arc::new(z_auth_postgres::PgMfaRepository::new(pool.clone())), // feature `mfa`
-    )
-    .with_code_sender(Arc::new(my_mailer)),                   // with email / sms only; see z-auth-mfa-delivery
-);
-let auth = ZAuth::builder(EnvLoader.load_config()?, repos)
-    .extension(mfa.clone())
-    .build()?;                // checks the setup, installs the second-factor gate
-let mfa_service = mfa.service().unwrap();   // enrollment and factor management
-// every few minutes, auth.tick() purges expired challenges and enrollments
-```
+use z_auth::prelude::*;
+use z_auth_mfa::config::{MfaConfigLoader, MfaEnvLoader};
+use z_auth_mfa::{CodeSender, Mfa, MfaService};
+use z_auth_postgres::PgMfaRepository;
 
-`build()` fails with `AuthError::Config` in two cases: when `AUTH_MFA_METHODS` lists `email` or `sms` but no `CodeSender` was given, and when there is neither `AUTH_MFA_ENCRYPTION_KEY` nor a custom `SecretSealer`.
-
-## Logging in
-
-`login()` returns either tokens or a challenge.
-
-```rust
-match auth.authentication().login(credentials, ctx.clone()).await? {
-    LoginOutcome::Tokens(pair) => { /* no second factor needed */ }
-    LoginOutcome::SecondFactor(challenge) => {
-        // challenge.methods: e.g. ["totp", "recovery_code"]
-        // challenge.delivery: set when an email / SMS code was already sent
-        let pair = auth.authentication().complete_login(SecondFactorProof {
-            challenge_token: challenge.challenge_token,
-            method: Some("totp".into()),        // or None: whatever the code is
-            code: "123456".into(),
-        }, ctx).await?;
-    }
+fn build_auth(
+    pool: sqlx::PgPool,
+    repos: Repositories,
+    mailer: Arc<dyn CodeSender>,
+) -> Result<(ZAuth, Arc<dyn MfaService>), Box<dyn std::error::Error>> {
+    let mfa = Arc::new(
+        Mfa::new(
+            MfaEnvLoader.load_settings()?,              // AUTH_MFA_*
+            Arc::new(PgMfaRepository::new(pool)),       // z-auth-postgres, feature `mfa`
+        )
+        .with_code_sender(mailer),                      // needed when email or sms is enabled
+    );
+    let auth = ZAuth::builder(EnvLoader.load_config()?, repos)
+        .extension(mfa.clone())
+        .build()?;                                      // validates and installs the gate
+    let service = mfa.service().expect("ZAuth was built with this extension");
+    Ok((auth, service))
 }
 ```
 
-Over HTTP, z-auth's `handlers::login` answers `{"status": "second_factor_required", "challenge_token": …}`. Its `handlers::complete_login` serves `POST /login/second-factor`, and `z_auth_mfa::api::handlers::send_login_code` sends or re-sends an email / SMS code for a pending login.
+`Mfa::service()` returns `None` until the `ZAuth` the extension was registered with has been built, because the service needs the core's repositories and revocation service. Keep the `Arc<Mfa>` or the returned `Arc<dyn MfaService>` around for the enrollment endpoints. `Mfa::settings()` exposes the validated `MfaSettings`.
 
-The password step opens no session and evicts none. The second step opens the session, and its tokens carry `amr`: `["mfa", "otp", "pwd"]` for TOTP, email and recovery codes, and `["mfa", "pwd", "sms"]` for SMS. Refreshes keep it. Guard sensitive routes with `auth.authorizer().require_mfa(&claims)`.
+To seal secrets with a key management service instead of the built-in XChaCha20-Poly1305 sealer, pass a `SecretSealer` implementation with `with_sealer`. A custom sealer takes precedence over `AUTH_MFA_ENCRYPTION_KEY`, which may then be left unset. The [ports guide](docs/ports.md) shows an illustrative implementation.
 
-### Guarantees
+`ZAuth::tick` should already run every few minutes for the core's own housekeeping. The extension piggybacks on it and purges expired challenges, enrollments and lockout rows at most once per `AUTH_MFA_PURGE_INTERVAL_SECS`. A tick that purged reports an `MfaTickReport`, which can be read with `tick_report.extension::<MfaTickReport>()`.
 
-- A challenge accepts `AUTH_MFA_CHALLENGE_MAX_ATTEMPTS` codes. Each attempt is counted before the code is checked, so parallel guesses can't exceed it. A challenge is single use and expires after `AUTH_MFA_CHALLENGE_TTL_SECS`. With `AUTH_MFA_CHALLENGE_MATCH`, the second step must come from the same client.
-- Failures across challenges count per user. `AUTH_MFA_LOCKOUT_THRESHOLD` of them within `AUTH_MFA_LOCKOUT_WINDOW_SECS` lock the user out of second-factor checks for `AUTH_MFA_LOCKOUT_SECS`. Only someone who knows the password can cause a lockout.
-- Each TOTP time step is accepted once: a compare-and-swap on the factor's last step. Every candidate in the skew window is compared in constant time.
-- Unknown, expired, used and forged challenge tokens all fail with the same `challenge_expired`.
+## Build failures
 
-## Enrollment and management (`MfaService`)
+`ZAuthBuilder::build` fails with `AuthError::Config` when the extension cannot work as configured. That happens when `AUTH_MFA_METHODS` lists `email` or `sms` but no `CodeSender` was given, and when there is no way to seal secrets. With the `aead` feature the second case means that neither `AUTH_MFA_ENCRYPTION_KEY` nor a custom sealer was provided, and without the feature it means that no custom sealer was provided. The build also fails when the same `Mfa` value is registered with a second `ZAuth`, because its service can be wired only once, and when another extension has already installed a second-factor gate.
 
-| Operation | Notes |
-|---|---|
-| `begin_totp_enrollment(user, label)` | Returns the base32 secret and an `otpauth://` URI to show as a QR code. The factor stays pending until confirmed, for up to `AUTH_MFA_ENROLLMENT_TTL_SECS` |
-| `begin_delivered_enrollment(user, method, destination, label)` | Email defaults to the account's address; SMS needs an E.164 number. Sends a code |
-| `resend_enrollment_code(user, factor)` | Bounded by `AUTH_MFA_CODE_RESEND_SECS` and `AUTH_MFA_CODE_MAX_SENDS` |
-| `confirm_enrollment(user, factor, code)` | Activates the factor. With the user's first factor, recovery codes are returned once |
-| `status(user)`, `factors(user)` | Active factors, whether the policy requires one, recovery codes left |
-| `send_step_up_code(user, method)` | An email / SMS code for a step-up proof |
-| `regenerate_recovery_codes(user, proof)` | Needs a fresh code (`StepUpProof`); replaces the old set |
-| `remove_factor(user, factor, proof)` | Needs a fresh code. With the last factor, the recovery codes go too |
-| `reset(user)` | Administrative, no proof: deletes every factor and recovery code (e.g. a lost phone, after your own identity checks) |
-| `send_login_code(challenge_token, method)` | Before login completes; the challenge token is the credential |
+Configuration mistakes are reported earlier. `MfaConfigLoader::load_settings` returns a `ConfigError` for a missing `AUTH_MFA_HASH_KEY`, a malformed key, an unknown method or a value outside its range. The [configuration guide](docs/configuration.md) lists every check.
 
-With `AUTH_MFA_END_SESSIONS_ON_REMOVAL` (on by default), `remove_factor` and `reset` end the user's sessions with `RevocationReason::SecondFactorChanged`.
+## Module layout
 
-`z_auth_mfa::api` has framework-agnostic DTOs and handlers for all of these. Handlers take the `user_id` from a token the host verified. Enrollment works with password-only tokens, so required-but-unenrolled users can enroll.
+The crate is organised by responsibility. Most hosts only touch `Mfa`, `config`, `api`, the `MfaService` trait and the two ports they implement, `MfaRepository` and `CodeSender`.
 
-## Configuration
+```text
+z_auth_mfa
+├── Mfa, EXTENSION_NAME      the extension (private module extension.rs, re-exported)
+├── api
+│   ├── dto                  request and response shapes of the enrollment endpoints
+│   ├── handlers             framework-agnostic handlers, including send_login_code
+│   └── mapping              conversions between DTOs and domain models
+├── config
+│   ├── loaders              MfaConfigLoader, MfaEnvLoader, MfaDirectLoader, validation
+│   └── model                MfaSettings, RawMfaConfig, Enforcement, Unenrolled, ...
+├── constants                defaults, limits and AUTH_MFA_* names
+├── crypto
+│   ├── base32               RFC 4648 for TOTP secrets, Crockford for recovery codes
+│   ├── codes                code generation, keyed hashing, challenge tokens, masking
+│   ├── sealer               SecretSealer, XChaChaSealer (feature aead)
+│   └── totp                 HOTP and TOTP with constant-time verification
+├── gate                     SecondFactorGate for MfaServiceImpl (the login side)
+├── keys                     generate_keys, GeneratedMfaKeys
+├── model                    MfaMethod, Factor, Challenge, StepUpProof, views, ...
+├── prelude                  convenience re-exports
+├── report                   MfaTickReport
+├── repository               MfaRepository, CodeLimits
+├── sender                   CodeSender, CodeDelivery, CodePurpose
+├── service                  MfaService
+└── service_impl             MfaServiceImpl
+```
 
-`MfaEnvLoader` reads these; `RawMfaConfig` has a setter for each.
+## Features
 
-| Variable | Default | Meaning |
-|---|---|---|
-| `AUTH_MFA_ENFORCEMENT` | `optional` | `off`: never challenge. `optional`: challenge users who enrolled. `required`: every user needs a factor. `roles`: users with `AUTH_MFA_REQUIRED_ROLES` need one, others are challenged if they enrolled |
-| `AUTH_MFA_REQUIRED_ROLES` | — | Role codes, comma-separated (with `roles`) |
-| `AUTH_MFA_UNENROLLED` | `allow` | A required user without a factor gets password-only tokens (`allow`, so they can enroll) or is refused with `second_factor_not_enrolled` (`deny`) |
-| `AUTH_MFA_METHODS` | `totp` | Enabled factors, preferred first: any of `totp`, `email`, `sms` |
-| `AUTH_MFA_ENCRYPTION_KEY` | required* | Base64, 32 bytes. Seals TOTP secrets and destinations (*unless a custom `SecretSealer` is given) |
-| `AUTH_MFA_PREVIOUS_ENCRYPTION_KEYS` | — | Comma-separated base64 keys, still accepted for opening |
-| `AUTH_MFA_HASH_KEY` | required | Base64, ≥ 32 bytes. HMAC key for codes, recovery codes and challenge tokens |
-| `AUTH_MFA_TOTP_ISSUER` | `AUTH_JWT_ISSUER` | Name shown in authenticator apps |
-| `AUTH_MFA_TOTP_ALGORITHM` | `sha1` | `sha1` \| `sha256` \| `sha512` (most apps only support `sha1`) |
-| `AUTH_MFA_TOTP_DIGITS` | `6` | 6–8 |
-| `AUTH_MFA_TOTP_PERIOD_SECS` | `30` | |
-| `AUTH_MFA_TOTP_SKEW_STEPS` | `1` | Steps accepted on either side of the current one, 0–5 |
-| `AUTH_MFA_TOTP_SECRET_BYTES` | `20` | 16–64 |
-| `AUTH_MFA_ENROLLMENT_TTL_SECS` | `600` | |
-| `AUTH_MFA_RECOVERY_CODE_COUNT` | `10` | 0 disables recovery codes |
-| `AUTH_MFA_RECOVERY_CODE_LENGTH` | `10` | Characters (Crockford base32, shown in groups of five), 8–32 |
-| `AUTH_MFA_CHALLENGE_TTL_SECS` | `300` | |
-| `AUTH_MFA_CHALLENGE_MAX_ATTEMPTS` | `5` | |
-| `AUTH_MFA_CHALLENGE_MATCH` | `none` | Or any of `ip`, `user_agent`, `fingerprint`: must match between the two steps |
-| `AUTH_MFA_LOCKOUT_THRESHOLD` | `10` | Failures per window; 0 never locks |
-| `AUTH_MFA_LOCKOUT_WINDOW_SECS` | `900` | |
-| `AUTH_MFA_LOCKOUT_SECS` | `900` | |
-| `AUTH_MFA_CODE_DIGITS` | `6` | Email / SMS codes, 6–10 |
-| `AUTH_MFA_CODE_TTL_SECS` | `300` | |
-| `AUTH_MFA_CODE_RESEND_SECS` | `30` | Minimum gap between sends |
-| `AUTH_MFA_CODE_MAX_SENDS` | `5` | Sends while a code is valid |
-| `AUTH_MFA_AUTO_SEND` | `true` | Send a code at login when the user has no TOTP factor |
-| `AUTH_MFA_END_SESSIONS_ON_REMOVAL` | `true` | |
-| `AUTH_MFA_PURGE_INTERVAL_SECS` | `300` | How often `tick` purges |
-| `AUTH_MFA_PURGE_RETENTION_SECS` | `86400` | How long expired rows are kept |
+The crate has one feature, `aead`, which is enabled by default. It provides `XChaChaSealer`, the built-in XChaCha20-Poly1305 sealer used whenever no custom sealer is supplied. Without it the host must call `Mfa::with_sealer`, otherwise the build fails.
 
-Generate the keys with `cargo run -p z-auth-mfa --example mfa_keygen`.
-
-## Keys and secrets at rest
-
-- TOTP secrets and email / SMS destinations are sealed with XChaCha20-Poly1305 (feature `aead`, on by default). Each value gets a random nonce and is bound to its user and factor ids, so a value copied to another row doesn't open. Only a masked hint of each destination (`j***@example.com`, `*******4567`) is stored in clear. To use a KMS instead, implement `SecretSealer` and pass it with `Mfa::with_sealer`.
-- To rotate the encryption key, set the new one and move the old one to `AUTH_MFA_PREVIOUS_ENCRYPTION_KEYS`. Sealed values carry their key id. Losing a key makes every factor sealed with it unusable (TOTP secrets and email / SMS destinations alike); recovery codes and `reset` still work.
-- Recovery codes, email / SMS codes and challenge secrets are stored only as HMAC-SHA256 under `AUTH_MFA_HASH_KEY`, so a leaked database can't be replayed or brute-forced offline. Changing the hash key invalidates every recovery code and pending challenge.
+There is a trap here when the crate is used together with the PostgreSQL adapter. The `mfa` feature of `z-auth-postgres` depends on `z-auth-mfa` with `default-features = false`, so that the adapter does not force a sealer on anyone. Cargo unifies features across the dependency graph, which means `aead` is enabled only if some crate asks for it. A host that declares its own `z-auth-mfa` dependency with default features keeps `aead`. A host that relies on the adapter's transitive dependency, or that disables default features itself, ends up without the built-in sealer and must provide one with `with_sealer`.
 
 ## Deployments
 
-- **Shared mode**: every instance uses the same database and the same `AUTH_MFA_*` keys.
-- **Federation mode**: second factors belong to the authority (UMS). Register the extension there, and route the enrollment endpoints and `POST /login/second-factor` to it. Session stores refuse `complete_login` like `login`. They need no z-auth-mfa: the `amr` of a session is synced with it, and `require_mfa` works everywhere.
+In shared mode every instance of the service runs the extension against the same database, and every instance must use the same `AUTH_MFA_ENCRYPTION_KEY`, `AUTH_MFA_PREVIOUS_ENCRYPTION_KEYS` and `AUTH_MFA_HASH_KEY`. An instance with a different hash key cannot verify challenge tokens or recovery codes created by the others, and an instance with a different encryption key cannot open their TOTP secrets.
+
+In federation mode second factors belong to the authority, the service that owns users and logins. Register the extension there only, and route the enrollment endpoints, `POST /login/second-factor` and `POST /login/second-factor/code` to it. Session stores refuse `complete_login` exactly as they refuse `login`, with `not_authority`, so a misrouted request fails cleanly. Session stores need no `z-auth-mfa` dependency at all, because the `amr` of every session is replicated with the session itself and `require_mfa` therefore works on every service. The [federation guide](../postgres/docs/federation.md) and the [cluster guide](../cluster/docs/cluster.md) describe the topology.
 
 ## Storage
 
-The crate ships no database code. Implement `MfaRepository`, or use `z-auth-postgres` with feature `mfa` (`PgMfaRepository`, migration set `migrations_mfa/`, `setup_db --mfa`). The trait documents which methods must be atomic.
+The crate ships no database code. Storage is the `MfaRepository` port, whose contract (including which methods must be atomic) is described in the [ports guide](docs/ports.md). The PostgreSQL adapter implements it as `PgMfaRepository` behind its `mfa` feature, together with a separate migration set in `migrations_mfa/` (versions from 2001) applied by `MFA_MIGRATOR` or `run_mfa_migrations`, or by `cargo run -p z-auth-postgres --features mfa --bin setup_db -- --mfa`. See the [PostgreSQL adapter](../postgres/README.md) for details. For tests, `z-auth-testkit` with its `mfa` feature provides an in-memory implementation.
+
+## Guides
+
+The guides in `docs/` cover the crate in depth. The [login flow](docs/login-flow.md) explains the gate's decision, challenge tokens, the verification order and the HTTP endpoints of the two-step login. [Enrollment and factor management](docs/enrollment.md) covers `MfaService`, step-up proofs, recovery codes and the enrollment endpoints. [Security](docs/security.md) describes TOTP verification, sealing, keyed hashing, code generation and the guarantees the crate makes. [Configuration](docs/configuration.md) lists every `AUTH_MFA_*` variable with its default and validation. [Ports](docs/ports.md) documents `MfaRepository`, `CodeSender` and `SecretSealer` for implementers.
+
+For the core concepts this crate builds on, see the [extensions guide](../../docs/extensions.md), [sessions and tokens](../../docs/sessions-and-tokens.md), [authorization](../../docs/authorization.md) and the [HTTP API](../../docs/http-api.md).
