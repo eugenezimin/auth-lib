@@ -3,6 +3,8 @@
 //! Every default, limit and environment-variable name used by z-auth lives
 //! here — no other module should hard-code these values.
 
+use crate::conf::config::source::Key;
+
 // ── Access tokens (JWT) ───────────────────────────────────────────────────────
 
 /// Default access-token lifetime: 5 minutes.
@@ -118,6 +120,47 @@ pub const ENV_PASSWORD_REQUIRE_UPPERCASE: &str = "AUTH_PASSWORD_REQUIRE_UPPERCAS
 pub const ENV_PASSWORD_REQUIRE_DIGIT: &str = "AUTH_PASSWORD_REQUIRE_DIGIT";
 pub const ENV_AUTHZ_MODE: &str = "AUTH_AUTHZ_MODE";
 pub const ENV_REFRESH_RETRY_MATCH: &str = "AUTH_REFRESH_RETRY_MATCH";
+
+/// Path of the YAML configuration file read by `ConfigSource::standard`.
+pub const ENV_CONFIG_FILE: &str = "AUTH_CONFIG_FILE";
+
+// ── Configuration file (read by `config::SourceLoader`) ──────────────────────
+
+/// The core's top-level section in the configuration file.
+pub const SECTION: &str = "auth";
+
+/// Every core setting: its environment variable and its path in the file.
+pub const KEYS: &[Key] = &[
+    Key::new(ENV_JWT_SIGNING_KEY, "auth.jwt.signing_key"),
+    Key::new(ENV_JWT_VERIFYING_KEYS, "auth.jwt.verifying_keys"),
+    Key::new(ENV_JWT_ACCESS_TTL_SECS, "auth.jwt.access_ttl_secs"),
+    Key::new(ENV_JWT_LEEWAY_SECS, "auth.jwt.leeway_secs"),
+    Key::new(ENV_JWT_ISSUER, "auth.jwt.issuer"),
+    Key::new(ENV_REFRESH_SECRET, "auth.session.refresh_secret"),
+    Key::new(
+        ENV_SESSION_IDLE_TIMEOUT_SECS,
+        "auth.session.idle_timeout_secs",
+    ),
+    Key::new(
+        ENV_SESSION_ABSOLUTE_TIMEOUT_SECS,
+        "auth.session.absolute_timeout_secs",
+    ),
+    Key::new(ENV_SESSION_HISTORY_SIZE, "auth.session.history_size"),
+    Key::new(ENV_REFRESH_GRACE_SECS, "auth.session.refresh_grace_secs"),
+    Key::new(ENV_IP_BINDING, "auth.session.ip_binding"),
+    Key::new(ENV_REFRESH_RETRY_MATCH, "auth.session.retry_match"),
+    Key::new(
+        ENV_MAX_SESSIONS_PER_USER,
+        "auth.session.max_sessions_per_user",
+    ),
+    Key::new(ENV_PASSWORD_MIN_LENGTH, "auth.password.min_length"),
+    Key::new(
+        ENV_PASSWORD_REQUIRE_UPPERCASE,
+        "auth.password.require_uppercase",
+    ),
+    Key::new(ENV_PASSWORD_REQUIRE_DIGIT, "auth.password.require_digit"),
+    Key::new(ENV_AUTHZ_MODE, "auth.authz.mode"),
+];
 
 // ── Config field names (used in configuration errors) ────────────────────────
 

@@ -11,6 +11,16 @@
 //! let config = EnvLoader.load_config().expect("failed to load config");
 //! ```
 //!
+//! # Example — a YAML file with environment overrides
+//!
+//! ```rust,no_run
+//! use z_auth::conf::config::{ConfigLoader, ConfigSource, SourceLoader};
+//!
+//! let source = ConfigSource::yaml_file("z-auth.yaml")?.with_env();
+//! let config = SourceLoader::new(source).load_config()?;
+//! # Ok::<(), z_auth::conf::config::ConfigError>(())
+//! ```
+//!
 //! # Example — pre-filled struct (no env)
 //!
 //! ```rust
@@ -32,6 +42,7 @@ use crate::conf::config::model::{
     AuthConfig, AuthzConfig, AuthzMode, ConfigError, JwtConfig, PasswordPolicy, RawConfig,
     RetryMatch, SessionConfig,
 };
+use crate::conf::config::source::{ConfigSource, Section};
 use crate::conf::constants::*;
 
 // ── Loaders ───────────────────────────────────────────────────────────────────
@@ -40,8 +51,21 @@ use crate::conf::constants::*;
 ///
 /// Reads the process environment only — loading a `.env` file is left to the
 /// host application (e.g. via `dotenvy`) so the library never mutates the
-/// environment.
+/// environment.  Same as `SourceLoader::new(ConfigSource::env())`.
 pub struct EnvLoader;
+
+/// Loads configuration from a [`ConfigSource`]: the `auth` section of a
+/// YAML file, `AUTH_*` environment variables, or both (the environment
+/// wins).
+pub struct SourceLoader {
+    pub source: ConfigSource,
+}
+
+impl SourceLoader {
+    pub fn new(source: ConfigSource) -> Self {
+        Self { source }
+    }
+}
 
 /// Loads configuration from a caller-supplied [`RawConfig`] struct.
 ///
@@ -65,48 +89,59 @@ impl ConfigLoader for DirectLoader {
 
 impl ConfigLoader for EnvLoader {
     fn load(&self) -> Result<RawConfig, ConfigError> {
+        SourceLoader::new(ConfigSource::env()).load()
+    }
+}
+
+impl ConfigLoader for SourceLoader {
+    fn load(&self) -> Result<RawConfig, ConfigError> {
+        let s = self.source.section(SECTION, KEYS, &[])?;
         Ok(RawConfig {
-            jwt_signing_key: env_str(ENV_JWT_SIGNING_KEY),
-            jwt_verifying_keys: env_str(ENV_JWT_VERIFYING_KEYS).map(|v| {
+            jwt_signing_key: str_opt(&s, ENV_JWT_SIGNING_KEY),
+            jwt_verifying_keys: str_opt(&s, ENV_JWT_VERIFYING_KEYS).map(|v| {
                 v.split(',')
                     .map(|k| k.trim().to_string())
                     .filter(|k| !k.is_empty())
                     .collect()
             }),
-            jwt_access_ttl_secs: parse_opt(ENV_JWT_ACCESS_TTL_SECS)?,
-            jwt_leeway_secs: parse_opt(ENV_JWT_LEEWAY_SECS)?,
-            jwt_issuer: env_str(ENV_JWT_ISSUER),
-            refresh_secret: env_str(ENV_REFRESH_SECRET),
-            session_idle_timeout_secs: parse_opt(ENV_SESSION_IDLE_TIMEOUT_SECS)?,
-            session_absolute_timeout_secs: parse_opt(ENV_SESSION_ABSOLUTE_TIMEOUT_SECS)?,
-            session_history_size: parse_opt(ENV_SESSION_HISTORY_SIZE)?,
-            refresh_grace_secs: parse_opt(ENV_REFRESH_GRACE_SECS)?,
-            ip_binding: parse_opt(ENV_IP_BINDING)?,
-            max_sessions_per_user: parse_opt(ENV_MAX_SESSIONS_PER_USER)?,
-            password_min_length: parse_opt(ENV_PASSWORD_MIN_LENGTH)?,
-            password_require_uppercase: parse_opt(ENV_PASSWORD_REQUIRE_UPPERCASE)?,
-            password_require_digit: parse_opt(ENV_PASSWORD_REQUIRE_DIGIT)?,
-            authz_mode: env_str(ENV_AUTHZ_MODE),
-            refresh_retry_match: env_str(ENV_REFRESH_RETRY_MATCH),
+            jwt_access_ttl_secs: parse_opt(&s, ENV_JWT_ACCESS_TTL_SECS)?,
+            jwt_leeway_secs: parse_opt(&s, ENV_JWT_LEEWAY_SECS)?,
+            jwt_issuer: str_opt(&s, ENV_JWT_ISSUER),
+            refresh_secret: str_opt(&s, ENV_REFRESH_SECRET),
+            session_idle_timeout_secs: parse_opt(&s, ENV_SESSION_IDLE_TIMEOUT_SECS)?,
+            session_absolute_timeout_secs: parse_opt(&s, ENV_SESSION_ABSOLUTE_TIMEOUT_SECS)?,
+            session_history_size: parse_opt(&s, ENV_SESSION_HISTORY_SIZE)?,
+            refresh_grace_secs: parse_opt(&s, ENV_REFRESH_GRACE_SECS)?,
+            ip_binding: parse_opt(&s, ENV_IP_BINDING)?,
+            max_sessions_per_user: parse_opt(&s, ENV_MAX_SESSIONS_PER_USER)?,
+            password_min_length: parse_opt(&s, ENV_PASSWORD_MIN_LENGTH)?,
+            password_require_uppercase: parse_opt(&s, ENV_PASSWORD_REQUIRE_UPPERCASE)?,
+            password_require_digit: parse_opt(&s, ENV_PASSWORD_REQUIRE_DIGIT)?,
+            authz_mode: str_opt(&s, ENV_AUTHZ_MODE),
+            refresh_retry_match: str_opt(&s, ENV_REFRESH_RETRY_MATCH),
         })
     }
 }
 
-fn env_str(key: &str) -> Option<String> {
-    std::env::var(key).ok()
+fn str_opt(s: &Section, key: &str) -> Option<String> {
+    s.get(key).map(|v| v.value)
 }
 
-fn parse_opt<T>(key: &str) -> Result<Option<T>, ConfigError>
+fn parse_opt<T>(s: &Section, key: &str) -> Result<Option<T>, ConfigError>
 where
     T: std::str::FromStr,
     T::Err: std::fmt::Display,
 {
-    match std::env::var(key) {
-        Err(_) => Ok(None),
-        Ok(raw) => raw.parse::<T>().map(Some).map_err(|e| ConfigError::Parse {
-            key: key.into(),
-            reason: e.to_string(),
-        }),
+    match s.get(key) {
+        None => Ok(None),
+        Some(v) => v
+            .value
+            .parse::<T>()
+            .map(Some)
+            .map_err(|e| ConfigError::Parse {
+                key: v.origin,
+                reason: e.to_string(),
+            }),
     }
 }
 

@@ -4,6 +4,8 @@
 //! Built-in implementations live in [`crate::conf::config::loaders`]:
 //!
 //! - [`EnvLoader`](crate::conf::config::EnvLoader)       – reads `AUTH_*` environment variables
+//! - [`SourceLoader`](crate::conf::config::SourceLoader) – reads a [`ConfigSource`](crate::conf::config::ConfigSource):
+//!   the `auth` section of a YAML file, the environment, or both
 //! - [`DirectLoader`](crate::conf::config::DirectLoader) – accepts a pre-filled [`RawConfig`]
 //!
 //! # Adding a custom loader
