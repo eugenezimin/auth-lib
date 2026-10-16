@@ -1,6 +1,6 @@
 # Configuration
 
-z-auth is configured through a single validated value, `AuthConfig`, which the host passes explicitly to `ZAuth::builder`. This guide documents every setting the core reads, the environment variables `EnvLoader` maps them from, their defaults and validation rules, the `RawConfig` builder for configuring in code, the `ConfigLoader` trait for other sources, the error type, and how secrets are kept out of logs. The core configures nothing about databases or HTTP servers, and the optional crates read their own variables, which are documented in their guides.
+z-auth is configured through a single validated value, `AuthConfig`, which the host passes explicitly to `ZAuth::builder`. This guide documents every setting the core reads, the environment variables `EnvLoader` maps them from, the YAML configuration file that `SourceLoader` reads them from, their defaults and validation rules, the `RawConfig` builder for configuring in code, the `ConfigLoader` trait for other sources, the error type, and how secrets are kept out of logs. The core configures nothing about databases or HTTP servers, and the optional crates read their own variables, which are documented in their guides.
 
 ## How configuration flows
 
@@ -9,9 +9,13 @@ Every source produces a `RawConfig`, a flat snapshot in which every field is opt
 ```mermaid
 flowchart LR
     env["process environment (AUTH_*)"] --> el["EnvLoader"]
+    file["YAML file (auth section)"] --> src["ConfigSource"]
+    env -->|"overrides the file"| src
+    src --> sl["SourceLoader"]
     code["values in code"] --> dl["DirectLoader"]
-    other["Vault, SSM, a file, ..."] --> cl["your ConfigLoader"]
+    other["Vault, SSM, ..."] --> cl["your ConfigLoader"]
     el --> raw["RawConfig"]
+    sl --> raw
     dl --> raw
     cl --> raw
     raw -->|"build()"| cfg["AuthConfig (jwt, session, password, authz)"]
@@ -46,7 +50,82 @@ flowchart LR
 
 Numbers are parsed as unsigned integers and booleans with Rust's `bool` parser, which accepts exactly `true` and `false`. A value that does not parse fails with `ConfigError::Parse` naming the variable. Surrounding whitespace is trimmed from base64 keys, from each entry of the verifying key list, from the mode and from the retry-match entries, but not from numbers or booleans. A variable that is set to an empty string counts as set, so `AUTH_JWT_SIGNING_KEY=` is rejected as a key of 0 bytes, `AUTH_REFRESH_SECRET=` as a secret that is too short and an empty numeric variable as unparseable. Remove the line instead of leaving it empty. The verifying-key list is the exception, because empty entries are dropped and an empty list falls back to the derived key.
 
+One more variable, `AUTH_CONFIG_FILE`, is not a setting itself. It names the YAML configuration file that `ConfigSource::standard` loads, as described in the next section.
+
 The password policy counts characters, not bytes, and checks uppercase letters with Unicode's notion of uppercase while the digit rule requires an ASCII digit. It applies to registration and to password changes through `UserService::update`.
+
+## Configuration file
+
+The same settings can live in a YAML file, next to the settings of the optional crates. A `ConfigSource` holds up to two layers, the file and the environment, and every loader that reads from it looks a setting up in the environment first and in the file second. An environment variable therefore always overrides the file, which lets the file carry the structure of a deployment while secrets and per-instance values stay in the environment or a secret store. `SourceLoader` reads the core's settings from a `ConfigSource`, and `EnvLoader` is the same loader over a source that only has the environment.
+
+```rust
+use z_auth::conf::config::{ConfigLoader, ConfigSource, SourceLoader};
+
+// The file named by AUTH_CONFIG_FILE with the environment on top, or the
+// environment alone when AUTH_CONFIG_FILE is unset.
+let source = ConfigSource::standard()?;
+let config = SourceLoader::new(source.clone()).load_config()?;
+
+// The same with an explicit path.
+let source = ConfigSource::yaml_file("/etc/z-auth/z-auth.yaml")?.with_env();
+```
+
+`ConfigSource::yaml_file` and `ConfigSource::yaml_str` give a source with only the file, and `with_env` adds the process environment on top. `ConfigSource::from_lookup` and `with_lookup` take a closure instead of the process environment, which suits tests and secret stores keyed by variable name. A source is cheap to clone, so one value can be handed to every crate's loader.
+
+The file has one top-level section per crate. The core reads `auth`, z-auth-cluster reads `cluster`, z-auth-mfa reads `mfa`, z-auth-mfa-sender reads `mfa.delivery` and the PostgreSQL adapter reads `database`. A crate never looks at another crate's section, sections that no crate claims are ignored, and the host is free to keep its own settings in the same file and read them with `ConfigSource::get`. The `z-auth.example.yaml` file at the repository root contains every section with every setting at its default and the overriding variable as a comment. The core's section looks like this.
+
+```yaml
+auth:
+  jwt:
+    signing_key: ~             # AUTH_JWT_SIGNING_KEY
+    verifying_keys: []         # AUTH_JWT_VERIFYING_KEYS
+    issuer: z-auth
+    access_ttl_secs: 300
+    leeway_secs: 30
+  session:
+    refresh_secret: ~          # AUTH_REFRESH_SECRET
+    idle_timeout_secs: 1800
+    absolute_timeout_secs: 28800
+    history_size: 10
+    refresh_grace_secs: 30
+    ip_binding: false
+    retry_match: [ip]
+    max_sessions_per_user: 5
+  password:
+    min_length: 8
+    require_uppercase: true
+    require_digit: true
+  authz:
+    mode: rbac
+```
+
+| Path | Variable |
+|---|---|
+| `auth.jwt.signing_key` | `AUTH_JWT_SIGNING_KEY` |
+| `auth.jwt.verifying_keys` | `AUTH_JWT_VERIFYING_KEYS` |
+| `auth.jwt.issuer` | `AUTH_JWT_ISSUER` |
+| `auth.jwt.access_ttl_secs` | `AUTH_JWT_ACCESS_TTL_SECS` |
+| `auth.jwt.leeway_secs` | `AUTH_JWT_LEEWAY_SECS` |
+| `auth.session.refresh_secret` | `AUTH_REFRESH_SECRET` |
+| `auth.session.idle_timeout_secs` | `AUTH_SESSION_IDLE_TIMEOUT_SECS` |
+| `auth.session.absolute_timeout_secs` | `AUTH_SESSION_ABSOLUTE_TIMEOUT_SECS` |
+| `auth.session.history_size` | `AUTH_SESSION_HISTORY_SIZE` |
+| `auth.session.refresh_grace_secs` | `AUTH_REFRESH_GRACE_SECS` |
+| `auth.session.ip_binding` | `AUTH_IP_BINDING` |
+| `auth.session.retry_match` | `AUTH_REFRESH_RETRY_MATCH` |
+| `auth.session.max_sessions_per_user` | `AUTH_MAX_SESSIONS_PER_USER` |
+| `auth.password.min_length` | `AUTH_PASSWORD_MIN_LENGTH` |
+| `auth.password.require_uppercase` | `AUTH_PASSWORD_REQUIRE_UPPERCASE` |
+| `auth.password.require_digit` | `AUTH_PASSWORD_REQUIRE_DIGIT` |
+| `auth.authz.mode` | `AUTH_AUTHZ_MODE` |
+
+A value in the file goes through exactly the same parsing and validation as the variable it stands for, so the defaults and rules in this guide apply to both. Lists such as `verifying_keys` and `retry_match` may be written as YAML sequences or as the comma-separated string the variable uses. Only `true` and `false` are booleans, as in the environment, so a word such as `off` or `yes` stays text and is rejected where a boolean is expected. A setting written as `~` or as an empty list counts as unset and falls back to its default, and so does a setting that is left out.
+
+The file is checked more strictly than the environment. A key inside the `auth` section that the core does not know, such as a misspelt `isuer`, fails the load with `ConfigError::Parse`, while an unknown environment variable is simply never read. A value that does not parse is reported with its path and the file it came from as the key, for example `auth.jwt.access_ttl_secs in /etc/z-auth/z-auth.yaml`, whereas a bad environment variable is reported by its name. A file that cannot be read or is not valid YAML fails with the file name as the key.
+
+The environment keeps its own rules when it overrides the file. A variable that is set to an empty string still counts as set for the core, so `AUTH_JWT_ISSUER=` would override the file with an empty issuer rather than fall back to it. Remove such variables rather than leaving them empty.
+
+Reading files needs the `yaml` feature, which is on by default and pulls in the `serde-saphyr` parser. Without it `ConfigSource`, `SourceLoader` and the environment layer still work, `yaml_file` and `yaml_str` are not compiled, and `ConfigSource::standard` fails when `AUTH_CONFIG_FILE` is set. The optional crates use `ConfigSource` without enabling the feature themselves, so the host's choice for the core decides whether files are available everywhere.
 
 ## Validation rules
 
@@ -120,7 +199,7 @@ let config = VaultLoader.load_config()?;
 
 ## Errors
 
-`ConfigError` has two variants. `Parse { key, reason }` reports a value that is present but invalid, with `key` naming the environment variable or, for keys and secrets, the field (`jwt_signing_key`, `jwt_verifying_keys`, `refresh_secret`). `Missing(String)` reports a required value that was not set. The core's own loaders never return it, because nothing in `AuthConfig` is required at load time, but the cluster and mfa loaders use it for their mandatory settings. `ConfigError` implements `Display` and `std::error::Error`, and converts into `AuthError::Config` with `From`, so `?` works in functions returning `AuthError`.
+`ConfigError` has two variants. `Parse { key, reason }` reports a value that is present but invalid, with `key` naming the environment variable, the path and file of a value from the configuration file (`auth.jwt.leeway_secs in z-auth.yaml`) or, for keys and secrets, the field (`jwt_signing_key`, `jwt_verifying_keys`, `refresh_secret`). It also reports an unknown key in the file and a file that cannot be read or parsed. `Missing(String)` reports a required value that was not set. The core's own loaders never return it, because nothing in `AuthConfig` is required at load time, but the cluster and mfa loaders use it for their mandatory settings. `ConfigError` implements `Display` and `std::error::Error`, and converts into `AuthError::Config` with `From`, so `?` works in functions returning `AuthError`.
 
 ## Secrets in logs
 
@@ -128,4 +207,12 @@ let config = VaultLoader.load_config()?;
 
 ## Variables of the other crates
 
-The optional crates read their own variable families, which the core ignores entirely. z-auth-cluster reads `AUTH_DEPLOYMENT_MODE`, `AUTH_CLUSTER_*`, `AUTH_AUTHORITY_SERVICE`, `AUTH_LINK_*`, `AUTH_SESSION_DISTRIBUTION`, `AUTH_FORK_*` and `AUTH_FEDERATION_*`, documented in the [cluster configuration guide](../adapters/cluster/docs/configuration.md). z-auth-mfa reads `AUTH_MFA_*`, documented in the [mfa configuration guide](../adapters/mfa/docs/configuration.md), except for the delivery variables such as `AUTH_MFA_EMAIL_PROVIDER` and `AUTH_MFA_SMS_PROVIDER`, which z-auth-mfa-sender reads and documents in its [configuration guide](../adapters/mfa/delivery/docs/configuration.md). The PostgreSQL adapter reads `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `DB_MAX_POOL_SIZE` and `DB_CONNECT_TIMEOUT_SECS` through `PgConfig::from_env`, documented in the [PostgreSQL adapter guide](../adapters/postgres/README.md).
+The optional crates read their own variable families and their own sections of the configuration file, which the core ignores entirely. z-auth-cluster reads `AUTH_DEPLOYMENT_MODE`, `AUTH_CLUSTER_*`, `AUTH_AUTHORITY_SERVICE`, `AUTH_LINK_*`, `AUTH_SESSION_DISTRIBUTION`, `AUTH_FORK_*` and `AUTH_FEDERATION_*`, documented in the [cluster configuration guide](../adapters/cluster/docs/configuration.md). z-auth-mfa reads `AUTH_MFA_*`, documented in the [mfa configuration guide](../adapters/mfa/docs/configuration.md), except for the delivery variables such as `AUTH_MFA_EMAIL_PROVIDER` and `AUTH_MFA_SMS_PROVIDER`, which z-auth-mfa-sender reads and documents in its [configuration guide](../adapters/mfa/delivery/docs/configuration.md). The PostgreSQL adapter reads `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `DB_MAX_POOL_SIZE` and `DB_CONNECT_TIMEOUT_SECS` through `PgConfig::from_env`, documented in the [PostgreSQL adapter guide](../adapters/postgres/README.md). Each of these crates also has a loader over a `ConfigSource` (`ClusterSourceLoader`, `MfaSourceLoader`, `DeliveryConfig::from_source` and `PgConfig::from_source`), so one source built at startup configures all of them.
+
+```rust
+let source = ConfigSource::standard()?;
+let auth = SourceLoader::new(source.clone()).load_config()?;
+let mfa = MfaSourceLoader::new(source.clone()).load_settings()?;
+let delivery = DeliveryConfig::from_source(&source)?;
+let pg = PgConfig::from_source(&source)?;
+```

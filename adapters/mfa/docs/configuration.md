@@ -1,16 +1,19 @@
 # Configuration
 
-`z-auth-mfa` has its own configuration, separate from the core's `AuthConfig`. It is read from `AUTH_MFA_*` environment variables by `MfaEnvLoader`, or supplied by code as a `RawMfaConfig`, and validated into an `MfaSettings` value that `Mfa::new` takes. This guide explains how loading works, lists every variable with its default and validation rule, and shows how to generate the two keys. The core's own variables are described in the [configuration guide](../../../docs/configuration.md).
+`z-auth-mfa` has its own configuration, separate from the core's `AuthConfig`. It is read from `AUTH_MFA_*` environment variables by `MfaEnvLoader`, from the `mfa` section of a YAML configuration file by `MfaSourceLoader`, or supplied by code as a `RawMfaConfig`, and validated into an `MfaSettings` value that `Mfa::new` takes. This guide explains how loading works, lists every variable with its default and validation rule, and shows how to generate the two keys. The core's own variables are described in the [configuration guide](../../../docs/configuration.md).
 
 ## Loading
 
-Every source of configuration implements `MfaConfigLoader`. Its `load` method produces a `RawMfaConfig`, a flat struct in which every field is optional, and its provided `load_settings` method validates that into `MfaSettings`. The crate ships two loaders.
+Every source of configuration implements `MfaConfigLoader`. Its `load` method produces a `RawMfaConfig`, a flat struct in which every field is optional, and its provided `load_settings` method validates that into `MfaSettings`. The crate ships three loaders.
 
 ```mermaid
 flowchart LR
     Env["AUTH_MFA_* variables"] --> EnvLoader["MfaEnvLoader"]
+    File["YAML file (mfa section)"] --> Source["MfaSourceLoader"]
+    Env -->|"overrides the file"| Source
     Code["RawMfaConfig built in code"] --> Direct["MfaDirectLoader"]
     EnvLoader -->|"load()"| Raw["RawMfaConfig"]
+    Source -->|"load()"| Raw
     Direct -->|"load()"| Raw
     Raw -->|"build()"| Settings["MfaSettings"]
     Settings --> Mfa["Mfa::new(settings, repo)"]
@@ -22,6 +25,36 @@ flowchart LR
 use z_auth_mfa::config::{MfaConfigLoader, MfaEnvLoader};
 
 let settings = MfaEnvLoader.load_settings()?;
+```
+
+`MfaSourceLoader::new(source)` reads the `mfa` section of a z-auth `ConfigSource`, the YAML configuration file described in [the core configuration guide](../../../docs/configuration.md#configuration-file), with the environment layered on top. `MfaEnvLoader` is the same loader over a source that only has the environment, so values from either place go through identical validation. A variable that is set wins over the file, and the blank rule applies to each layer on its own, so a blank variable does not hide a value in the file. Lists may be YAML sequences or comma-separated strings. A value from the file that fails is reported with its path, such as `mfa.totp.digits in z-auth.yaml`, and a key in the `mfa` section that the crate does not know fails the load. The `mfa.delivery` sub-section belongs to z-auth-mfa-sender and is left alone. The path of every setting is in the table under [Variables](#variables).
+
+```rust
+use z_auth::conf::config::ConfigSource;
+use z_auth_mfa::config::{MfaConfigLoader, MfaSourceLoader};
+
+let source = ConfigSource::standard()?; // AUTH_CONFIG_FILE, then the environment
+let settings = MfaSourceLoader::new(source).load_settings()?;
+```
+
+The section groups the TOTP, recovery, challenge, lockout, code and purge settings, and keeps the two keys out of the file so they can come from the environment or a secret store.
+
+```yaml
+mfa:
+  enforcement: roles
+  required_roles: [admin, ops]
+  methods: [totp, email]
+  encryption_key: ~            # AUTH_MFA_ENCRYPTION_KEY from the environment
+  hash_key: ~                  # AUTH_MFA_HASH_KEY from the environment
+  totp:
+    issuer: Acme
+  challenge:
+    match: [ip, user_agent]
+  lockout:
+    threshold: 5
+  delivery:                    # read by z-auth-mfa-sender
+    email:
+      provider: smtp
 ```
 
 `MfaDirectLoader` wraps a `RawMfaConfig` assembled by code, which suits tests, embedded deployments and hosts with their own configuration system. `RawMfaConfig` has a builder-style setter for every field, named after the variable without its `AUTH_MFA_` prefix and lowercased. List setters accept any iterator of strings. Calling `build()` directly on a `RawMfaConfig` is equivalent to going through the loader.
@@ -40,52 +73,52 @@ let raw = RawMfaConfig::default()
 let settings = MfaDirectLoader::new(raw).load_settings()?;
 ```
 
-The blank-value rule belongs to the environment loader. A blank string given to a `RawMfaConfig` setter is passed on to validation, where it usually fails, with the exception of `totp_issuer`, for which a blank value means the default.
+The blank-value rule belongs to the environment and the file. A blank string given to a `RawMfaConfig` setter is passed on to validation, where it usually fails, with the exception of `totp_issuer`, for which a blank value means the default.
 
 ## Validation errors
 
-`RawMfaConfig::build` returns a `z_auth::conf::config::ConfigError`, which converts into `AuthError::Config` with `?`. `ConfigError::Missing` names a required variable that is absent, which applies to `AUTH_MFA_HASH_KEY` and to `AUTH_MFA_REQUIRED_ROLES` when enforcement is `roles`. `ConfigError::Parse` carries the variable name and a reason for every value that does not parse or lies outside its range, such as `must be 6–8, got 9` for `AUTH_MFA_TOTP_DIGITS`.
+`RawMfaConfig::build` returns a `z_auth::conf::config::ConfigError`, which converts into `AuthError::Config` with `?`. `ConfigError::Missing` names a required variable that is absent, which applies to `AUTH_MFA_HASH_KEY` and to `AUTH_MFA_REQUIRED_ROLES` when enforcement is `roles`. `ConfigError::Parse` carries the variable name (or, for a value that fails while loading from the file, its path) and a reason for every value that does not parse or lies outside its range, such as `must be 6–8, got 9` for `AUTH_MFA_TOTP_DIGITS`.
 
 Two conditions are only checked later, by `ZAuthBuilder::build`, because they depend on how the extension is wired rather than on the configuration alone. A missing `AUTH_MFA_ENCRYPTION_KEY` is acceptable to `build()` on the settings, because the host may supply a custom `SecretSealer`, and is rejected when the extension is built without one. Enabling `email` or `sms` without calling `Mfa::with_code_sender` is rejected at the same point.
 
 ## Variables
 
-The table lists every variable read by `MfaEnvLoader`, its default, and what `build()` accepts. Ranges are inclusive.
+The table lists every variable read by `MfaEnvLoader`, its path in the configuration file, its default, and what `build()` accepts. `AUTH_MFA_LOCKOUT_SECS` is the one setting whose path does not follow the variable's name, because `mfa.lockout.duration_secs` reads better than `mfa.lockout.secs`. Ranges are inclusive.
 
-| Variable | Default | Accepted values | Effect |
-|---|---|---|---|
-| `AUTH_MFA_ENFORCEMENT` | `optional` | `off`, `optional`, `required`, `roles` | Who must use a second factor, see below |
-| `AUTH_MFA_REQUIRED_ROLES` | none | Role codes matching `^[a-z][a-z0-9_.:-]*$`, at most 64 characters each | Roles that require a factor, mandatory and non-empty with `roles`, ignored otherwise |
-| `AUTH_MFA_UNENROLLED` | `allow` | `allow`, `deny` | What a required but unenrolled user gets at login |
-| `AUTH_MFA_METHODS` | `totp` | Non-empty list of `totp`, `email`, `sms` without duplicates | Enabled methods, preferred first |
-| `AUTH_MFA_ENCRYPTION_KEY` | none | Standard base64 of exactly 32 bytes | Seals TOTP secrets and destinations, required unless a custom sealer is given |
-| `AUTH_MFA_PREVIOUS_ENCRYPTION_KEYS` | none | List of standard base64 keys of 32 bytes each | Older keys still accepted for opening |
-| `AUTH_MFA_HASH_KEY` | none, required | Standard base64 of at least 32 bytes | HMAC key for recovery codes, email and SMS codes and challenge tokens |
-| `AUTH_MFA_TOTP_ISSUER` | `AUTH_JWT_ISSUER` | Any non-blank string | Issuer shown in authenticator apps |
-| `AUTH_MFA_TOTP_ALGORITHM` | `sha1` | `sha1`, `sha256`, `sha512`, case-insensitive | HMAC of new TOTP factors |
-| `AUTH_MFA_TOTP_DIGITS` | `6` | 6 to 8 | Digits of new TOTP factors |
-| `AUTH_MFA_TOTP_PERIOD_SECS` | `30` | 1 or more | Time step of new TOTP factors |
-| `AUTH_MFA_TOTP_SKEW_STEPS` | `1` | 0 to 5 | Steps accepted on either side of the current one |
-| `AUTH_MFA_TOTP_SECRET_BYTES` | `20` | 16 to 64 | Length of new TOTP secrets |
-| `AUTH_MFA_ENROLLMENT_TTL_SECS` | `600` | 1 or more | Lifetime of a pending factor |
-| `AUTH_MFA_RECOVERY_CODE_COUNT` | `10` | 0 to 32 | Codes per set, 0 disables recovery codes |
-| `AUTH_MFA_RECOVERY_CODE_LENGTH` | `10` | 8 to 32 | Crockford base32 characters per code |
-| `AUTH_MFA_CHALLENGE_TTL_SECS` | `300` | 1 or more | Lifetime of a login challenge |
-| `AUTH_MFA_CHALLENGE_MAX_ATTEMPTS` | `5` | 1 or more | Codes accepted per challenge, also per email or SMS code on a factor |
-| `AUTH_MFA_CHALLENGE_MATCH` | `none` | `none`, or a list of `ip`, `user_agent`, `fingerprint` | Client attributes that must match between the two login steps |
-| `AUTH_MFA_LOCKOUT_THRESHOLD` | `10` | Any unsigned integer, no range check | Failures per window that lock the user, 0 disables the lockout |
-| `AUTH_MFA_LOCKOUT_WINDOW_SECS` | `900` | 1 or more | Window in which failures are counted |
-| `AUTH_MFA_LOCKOUT_SECS` | `900` | 1 or more | Duration of a lockout |
-| `AUTH_MFA_CODE_DIGITS` | `6` | 6 to 10 | Digits of email and SMS codes |
-| `AUTH_MFA_CODE_TTL_SECS` | `300` | 1 or more | Lifetime of an email or SMS code |
-| `AUTH_MFA_CODE_RESEND_SECS` | `30` | 0 or more | Minimum gap between two sends, 0 allows immediate resends |
-| `AUTH_MFA_CODE_MAX_SENDS` | `5` | 1 or more | Sends while the latest code is still valid |
-| `AUTH_MFA_AUTO_SEND` | `true` | `true`, `false` | Send a code at login when the user has no TOTP factor |
-| `AUTH_MFA_END_SESSIONS_ON_REMOVAL` | `true` | `true`, `false` | End the user's sessions on `remove_factor` and `reset` |
-| `AUTH_MFA_PURGE_INTERVAL_SECS` | `300` | 1 or more | Minimum time between purges in `ZAuth::tick` |
-| `AUTH_MFA_PURGE_RETENTION_SECS` | `86400` | 0 or more | How long expired or consumed rows are kept before the purge deletes them |
+| Variable | Path in the file | Default | Accepted values | Effect |
+|---|---|---|---|---|
+| `AUTH_MFA_ENFORCEMENT` | `mfa.enforcement` | `optional` | `off`, `optional`, `required`, `roles` | Who must use a second factor, see below |
+| `AUTH_MFA_REQUIRED_ROLES` | `mfa.required_roles` | none | Role codes matching `^[a-z][a-z0-9_.:-]*$`, at most 64 characters each | Roles that require a factor, mandatory and non-empty with `roles`, ignored otherwise |
+| `AUTH_MFA_UNENROLLED` | `mfa.unenrolled` | `allow` | `allow`, `deny` | What a required but unenrolled user gets at login |
+| `AUTH_MFA_METHODS` | `mfa.methods` | `totp` | Non-empty list of `totp`, `email`, `sms` without duplicates | Enabled methods, preferred first |
+| `AUTH_MFA_ENCRYPTION_KEY` | `mfa.encryption_key` | none | Standard base64 of exactly 32 bytes | Seals TOTP secrets and destinations, required unless a custom sealer is given |
+| `AUTH_MFA_PREVIOUS_ENCRYPTION_KEYS` | `mfa.previous_encryption_keys` | none | List of standard base64 keys of 32 bytes each | Older keys still accepted for opening |
+| `AUTH_MFA_HASH_KEY` | `mfa.hash_key` | none, required | Standard base64 of at least 32 bytes | HMAC key for recovery codes, email and SMS codes and challenge tokens |
+| `AUTH_MFA_TOTP_ISSUER` | `mfa.totp.issuer` | `AUTH_JWT_ISSUER` | Any non-blank string | Issuer shown in authenticator apps |
+| `AUTH_MFA_TOTP_ALGORITHM` | `mfa.totp.algorithm` | `sha1` | `sha1`, `sha256`, `sha512`, case-insensitive | HMAC of new TOTP factors |
+| `AUTH_MFA_TOTP_DIGITS` | `mfa.totp.digits` | `6` | 6 to 8 | Digits of new TOTP factors |
+| `AUTH_MFA_TOTP_PERIOD_SECS` | `mfa.totp.period_secs` | `30` | 1 or more | Time step of new TOTP factors |
+| `AUTH_MFA_TOTP_SKEW_STEPS` | `mfa.totp.skew_steps` | `1` | 0 to 5 | Steps accepted on either side of the current one |
+| `AUTH_MFA_TOTP_SECRET_BYTES` | `mfa.totp.secret_bytes` | `20` | 16 to 64 | Length of new TOTP secrets |
+| `AUTH_MFA_ENROLLMENT_TTL_SECS` | `mfa.enrollment_ttl_secs` | `600` | 1 or more | Lifetime of a pending factor |
+| `AUTH_MFA_RECOVERY_CODE_COUNT` | `mfa.recovery.code_count` | `10` | 0 to 32 | Codes per set, 0 disables recovery codes |
+| `AUTH_MFA_RECOVERY_CODE_LENGTH` | `mfa.recovery.code_length` | `10` | 8 to 32 | Crockford base32 characters per code |
+| `AUTH_MFA_CHALLENGE_TTL_SECS` | `mfa.challenge.ttl_secs` | `300` | 1 or more | Lifetime of a login challenge |
+| `AUTH_MFA_CHALLENGE_MAX_ATTEMPTS` | `mfa.challenge.max_attempts` | `5` | 1 or more | Codes accepted per challenge, also per email or SMS code on a factor |
+| `AUTH_MFA_CHALLENGE_MATCH` | `mfa.challenge.match` | `none` | `none`, or a list of `ip`, `user_agent`, `fingerprint` | Client attributes that must match between the two login steps |
+| `AUTH_MFA_LOCKOUT_THRESHOLD` | `mfa.lockout.threshold` | `10` | Any unsigned integer, no range check | Failures per window that lock the user, 0 disables the lockout |
+| `AUTH_MFA_LOCKOUT_WINDOW_SECS` | `mfa.lockout.window_secs` | `900` | 1 or more | Window in which failures are counted |
+| `AUTH_MFA_LOCKOUT_SECS` | `mfa.lockout.duration_secs` | `900` | 1 or more | Duration of a lockout |
+| `AUTH_MFA_CODE_DIGITS` | `mfa.code.digits` | `6` | 6 to 10 | Digits of email and SMS codes |
+| `AUTH_MFA_CODE_TTL_SECS` | `mfa.code.ttl_secs` | `300` | 1 or more | Lifetime of an email or SMS code |
+| `AUTH_MFA_CODE_RESEND_SECS` | `mfa.code.resend_secs` | `30` | 0 or more | Minimum gap between two sends, 0 allows immediate resends |
+| `AUTH_MFA_CODE_MAX_SENDS` | `mfa.code.max_sends` | `5` | 1 or more | Sends while the latest code is still valid |
+| `AUTH_MFA_AUTO_SEND` | `mfa.code.auto_send` | `true` | `true`, `false` | Send a code at login when the user has no TOTP factor |
+| `AUTH_MFA_END_SESSIONS_ON_REMOVAL` | `mfa.end_sessions_on_removal` | `true` | `true`, `false` | End the user's sessions on `remove_factor` and `reset` |
+| `AUTH_MFA_PURGE_INTERVAL_SECS` | `mfa.purge.interval_secs` | `300` | 1 or more | Minimum time between purges in `ZAuth::tick` |
+| `AUTH_MFA_PURGE_RETENTION_SECS` | `mfa.purge.retention_secs` | `86400` | 0 or more | How long expired or consumed rows are kept before the purge deletes them |
 
-A commented template of all these variables is part of the repository's `env.example`. The same file also lists the delivery variables, such as `AUTH_MFA_EMAIL_PROVIDER` and `AUTH_MFA_SMS_PROVIDER`, which share the prefix but are read by z-auth-mfa-sender rather than by `MfaEnvLoader`. They are documented in its [configuration guide](../delivery/docs/configuration.md).
+A commented template of all these variables is part of the repository's `env.example`, and `z-auth.example.yaml` holds the same settings as a file. The same file also lists the delivery variables, such as `AUTH_MFA_EMAIL_PROVIDER` and `AUTH_MFA_SMS_PROVIDER`, which share the prefix but are read by z-auth-mfa-sender rather than by `MfaEnvLoader`. They are documented in its [configuration guide](../delivery/docs/configuration.md).
 
 ## Enforcement
 

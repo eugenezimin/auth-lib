@@ -94,7 +94,7 @@ Without `federation`, `Cluster::new` returns a configuration error when `AUTH_DE
 
 ## Wiring
 
-Cluster settings are loaded separately from z-auth's own `AuthConfig`. `ClusterEnvLoader` reads the `AUTH_CLUSTER_*`, `AUTH_LINK_*`, `AUTH_FEDERATION_*`, `AUTH_FORK_*`, `AUTH_DEPLOYMENT_MODE`, `AUTH_AUTHORITY_SERVICE` and `AUTH_SESSION_DISTRIBUTION` variables into a `ClusterSettings`, as described in [the configuration guide](docs/configuration.md).
+Cluster settings are loaded separately from z-auth's own `AuthConfig`. `ClusterEnvLoader` reads the `AUTH_CLUSTER_*`, `AUTH_LINK_*`, `AUTH_FEDERATION_*`, `AUTH_FORK_*`, `AUTH_DEPLOYMENT_MODE`, `AUTH_AUTHORITY_SERVICE` and `AUTH_SESSION_DISTRIBUTION` variables into a `ClusterSettings`, and `ClusterSourceLoader` reads the same settings from the `cluster` section of a YAML configuration file with those variables on top, as described in [the configuration guide](docs/configuration.md).
 
 Shared mode is a single constructor. `SharedCluster::new(settings, transport, nodes)` takes the settings, an `Arc<dyn ClusterTransport>` and an `Arc<dyn NodeRepository>`. Register the same `Arc` with the builder and keep a clone for the inbound endpoint.
 
@@ -169,7 +169,7 @@ The public modules mirror the two modes, with shared types reused by federation 
 ```text
 z_auth_cluster
 ├── config              ClusterSettings and its loaders (always compiled)
-│   ├── loaders         ClusterConfigLoader, ClusterEnvLoader, ClusterDirectLoader, RawClusterConfig::build
+│   ├── loaders         ClusterConfigLoader, ClusterEnvLoader, ClusterSourceLoader, ClusterDirectLoader, RawClusterConfig::build
 │   └── model           ClusterSettings, ClusterConfig, FederationConfig, LinkConfig, ForkPolicy, enums
 ├── constants           defaults, protocol limits, environment variable names
 ├── shared              shared mode, and the wire model both modes use (always compiled)

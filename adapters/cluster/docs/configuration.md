@@ -1,6 +1,6 @@
 # Cluster configuration
 
-z-auth-cluster reads its own settings, separate from z-auth's `AuthConfig`. This guide lists every variable with its default, its alias, the validation applied to it and, just as important, the moment that validation happens. Some mistakes are caught when the settings are built, some only when `ZAuthBuilder::build()` runs the extension, and a few are never caught at all, so the last section collects the gotchas. The protocols these settings tune are described in [the shared-mode guide](cluster.md) and [the federation guide](replication.md), and z-auth's own variables are covered in [the core configuration guide](../../../docs/configuration.md).
+z-auth-cluster reads its own settings, separate from z-auth's `AuthConfig`. This guide lists every variable with its default, its alias, its path in the configuration file, the validation applied to it and, just as important, the moment that validation happens. Some mistakes are caught when the settings are built, some only when `ZAuthBuilder::build()` runs the extension, and a few are never caught at all, so the last section collects the gotchas. The protocols these settings tune are described in [the shared-mode guide](cluster.md) and [the federation guide](replication.md), and z-auth's own variables are covered in [the core configuration guide](../../../docs/configuration.md).
 
 ## Loading settings
 
@@ -9,21 +9,87 @@ Settings flow through three stages. A loader produces a `RawClusterConfig`, a fl
 ```mermaid
 flowchart LR
     ENV["environment variables"] --> EL["ClusterEnvLoader.load()"]
+    FILE["YAML file (cluster section)"] --> SL["ClusterSourceLoader.load()"]
+    ENV -->|"overrides the file"| SL
     CODE["RawClusterConfig built in code"] --> DL["ClusterDirectLoader.load()"]
     EL --> RAW["RawClusterConfig"]
+    SL --> RAW
     DL --> RAW
     RAW --> BUILD["RawClusterConfig::build()"]
     BUILD --> SET["ClusterSettings"]
     SET --> EXT["SharedCluster::new, Federation::new or Cluster::new"]
     EXT --> ZB["ZAuthBuilder::build()"]
     EL -.->|"numeric parse errors"| E1["ConfigError::Parse"]
+    SL -.->|"numeric parse errors, unknown keys"| E1
     BUILD -.->|"format, range and federation checks"| E2["ConfigError::Parse or Missing"]
     ZB -.->|"address, port, secret, mode and authority checks"| E3["AuthError::Config"]
 ```
 
-`ClusterConfigLoader` is the loader trait. It has one required method, `load()`, returning `Result<RawClusterConfig, ConfigError>`, and a provided method `load_settings()` that calls `load()` and then `build()`. Two loaders ship with the crate.
+`ClusterConfigLoader` is the loader trait. It has one required method, `load()`, returning `Result<RawClusterConfig, ConfigError>`, and a provided method `load_settings()` that calls `load()` and then `build()`. Three loaders ship with the crate.
 
 `ClusterEnvLoader` reads the environment. Like z-auth's `EnvLoader`, it never loads a `.env` file itself, so a host that keeps settings in `.env` must load that file first (for example with `dotenvy`) before calling the loader. Numeric variables are parsed while loading, so a value like `AUTH_CLUSTER_HEARTBEAT_MS=fast` fails in `load()` with `ConfigError::Parse` naming the variable. String variables are read as is and validated by `build()`.
+
+`ClusterSourceLoader::new(source)` reads the `cluster` section of a z-auth `ConfigSource`, the YAML configuration file described in [the core configuration guide](../../../docs/configuration.md#configuration-file), with the environment layered on top. `ClusterEnvLoader` is the same loader over a source that only has the environment, so both parse and validate identically. A variable that is set always wins over the file, and a value from the file that does not parse is reported with its path, for example `cluster.heartbeat_ms in z-auth.yaml`. A key in the `cluster` section that the crate does not know fails the load as well.
+
+```rust
+use z_auth::conf::config::ConfigSource;
+use z_auth_cluster::config::{ClusterConfigLoader, ClusterSourceLoader};
+
+let source = ConfigSource::standard()?; // AUTH_CONFIG_FILE, then the environment
+let settings = ClusterSourceLoader::new(source).load_settings()?;
+```
+
+The section groups the address under `advertise`, the inter-cluster links under `link` and the federation settings under `federation`, with the fork policy one level deeper.
+
+```yaml
+cluster:
+  deployment_mode: federation
+  service: orders
+  secret: ~                    # keep AUTH_CLUSTER_SECRET in the environment
+  advertise:
+    dns: orders-1.internal
+    port: 7000
+  heartbeat_ms: 2000
+  seeds: [ums.internal:7000]
+  link:
+    retry_attempts: 3
+  federation:
+    authority_service: ums
+    session_distribution: on_demand
+    fork:
+      window_ms: 5000
+```
+
+| Path | Variable |
+|---|---|
+| `cluster.deployment_mode` | `AUTH_DEPLOYMENT_MODE` |
+| `cluster.service` | `AUTH_CLUSTER_SERVICE` |
+| `cluster.secret` | `AUTH_CLUSTER_SECRET` |
+| `cluster.advertise.ip` | `AUTH_CLUSTER_ADVERTISE_IP` |
+| `cluster.advertise.dns` | `AUTH_CLUSTER_ADVERTISE_DNS` |
+| `cluster.advertise.port` | `AUTH_CLUSTER_ADVERTISE_PORT` |
+| `cluster.heartbeat_ms` | `AUTH_CLUSTER_HEARTBEAT_MS` |
+| `cluster.warning_after` | `AUTH_CLUSTER_WARNING_AFTER` |
+| `cluster.missing_after` | `AUTH_CLUSTER_MISSING_AFTER` |
+| `cluster.retired_ttl_secs` | `AUTH_CLUSTER_RETIRED_TTL_SECS` |
+| `cluster.max_skew_secs` | `AUTH_CLUSTER_MAX_SKEW_SECS` |
+| `cluster.self_fence` | `AUTH_CLUSTER_SELF_FENCE` |
+| `cluster.seeds` | `AUTH_CLUSTER_SEEDS` |
+| `cluster.link.retry_attempts` | `AUTH_LINK_RETRY_ATTEMPTS` |
+| `cluster.link.retry_backoff_ms` | `AUTH_LINK_RETRY_BACKOFF_MS` |
+| `cluster.link.breaker_failures` | `AUTH_LINK_BREAKER_FAILURES` |
+| `cluster.link.breaker_cooldown_secs` | `AUTH_LINK_BREAKER_COOLDOWN_SECS` |
+| `cluster.link.dead_reprobe_secs` | `AUTH_LINK_DEAD_REPROBE_SECS` |
+| `cluster.federation.authority_service` | `AUTH_AUTHORITY_SERVICE` |
+| `cluster.federation.session_distribution` | `AUTH_SESSION_DISTRIBUTION` |
+| `cluster.federation.max_staleness_secs` | `AUTH_FEDERATION_MAX_STALENESS_SECS` |
+| `cluster.federation.pull_page_size` | `AUTH_FEDERATION_PULL_PAGE_SIZE` |
+| `cluster.federation.purge_horizon_secs` | `AUTH_FEDERATION_PURGE_HORIZON_SECS` |
+| `cluster.federation.fork.window_ms` | `AUTH_FORK_WINDOW_MS` |
+| `cluster.federation.fork.max_benign` | `AUTH_FORK_MAX_BENIGN` |
+| `cluster.federation.fork.budget_window_secs` | `AUTH_FORK_BUDGET_WINDOW_SECS` |
+
+The legacy aliases (`AUTH_CLUSTER_OFFLINE_AFTER`, `AUTH_CLUSTER_REMOVE_AFTER` and `AUTH_CLUSTER_TOMBSTONE_SECS`) have no path in the file. They are still honoured in the environment, after the preferred variable and before the file, so an old variable left in a deployment keeps overriding the file just as the preferred one would. Seeds may be written as a YAML list or as the comma-separated string of the variable, and an empty list counts as unset.
 
 `ClusterDirectLoader::new(raw)` wraps a `RawClusterConfig` assembled in code and returns a clone of it from `load()`. `RawClusterConfig` has a consuming builder method for every field, named after the field, so a configuration can be written fluently and built directly without a loader.
 
@@ -100,7 +166,7 @@ The three stages check different things, and knowing which stage catches which m
 
 | Stage | Error type | Checks |
 |---|---|---|
-| `ClusterEnvLoader::load()` | `ConfigError::Parse` | Every numeric variable parses as its type (`u16`, `u32` or `u64`) |
+| `ClusterEnvLoader::load()` or `ClusterSourceLoader::load()` | `ConfigError::Parse` | Every numeric setting parses as its type (`u16`, `u32` or `u64`); the `cluster` section of the file has no unknown keys |
 | `RawClusterConfig::build()` | `ConfigError::Parse` | Secret is base64 and at least 32 bytes; warning and missing counts at least 1; advertise IP parses; every seed parses; mode, self-fence and session distribution values are known; link retry attempts, breaker failures and pull page size at least 1 |
 | `RawClusterConfig::build()` with `AUTH_DEPLOYMENT_MODE=federation` | `ConfigError::Missing` | `AUTH_AUTHORITY_SERVICE` set, `AUTH_CLUSTER_SECRET` set, `AUTH_CLUSTER_SEEDS` non-empty on every service except the authority |
 | `ZAuthBuilder::build()` (extension configure and assemble) | `AuthError::Config` | An advertise IP or DNS name is set; an advertise port is set; a secret is present; the explicit mode matches the extension; in federation mode the authority name resolves and the repositories match the instance's role |
@@ -253,3 +319,5 @@ The zero-value errors for the liveness counters always name the legacy keys. Set
 `AUTH_CLUSTER_HEARTBEAT_MS` is not only the heartbeat interval but the cadence of `ZAuth::tick`. Ticking less often than the configured interval makes every peer look late and triggers spurious warnings and removals; ticking more often sends more heartbeats than necessary. The value is not range checked, so `0` is accepted and makes every liveness threshold zero.
 
 `ClusterEnvLoader` never loads a `.env` file. Variables in a `.env` file are invisible unless the host loads the file into the process environment first.
+
+A variable left in the environment silently overrides the configuration file. When a value in the file seems to have no effect, check the environment for the variable (or one of its legacy aliases) first.

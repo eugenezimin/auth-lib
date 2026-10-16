@@ -83,6 +83,14 @@ let auth = ZAuth::builder(EnvLoader.load_config()?, repositories(&pool))
 auth.start().await?;
 ```
 
+The settings can also live in one YAML file instead of the environment. `z-auth.example.yaml` at the repository root holds every setting of every crate, one section per crate, and `ConfigSource::standard()` loads the file named by `AUTH_CONFIG_FILE` with the environment layered on top. Each crate has a loader over that source, and a variable always overrides the file, so the keys and the database password can stay in the environment. The [configuration guide](docs/configuration.md#configuration-file) describes the format.
+
+```rust
+let source = ConfigSource::standard()?; // AUTH_CONFIG_FILE, then the environment
+let pool = build_pg_pool(&PgConfig::from_source(&source)?).await?;
+let auth = ZAuth::builder(SourceLoader::new(source).load_config()?, repositories(&pool)).build()?;
+```
+
 `login` returns `LoginOutcome::Tokens` or, when an installed second-factor gate asks for one, `LoginOutcome::SecondFactor` with a challenge that `complete_login` answers. Access tokens carry the session's authentication methods in the `amr` claim, which `Authorizer::require_mfa` checks.
 
 ## Guides
@@ -97,7 +105,7 @@ The core guides live in [`docs/`](docs). They are meant to be read roughly in th
 | [Authorization](docs/authorization.md) | Authorization modes, roles, the permission catalog, the token encoding and request-time checks |
 | [Extensions](docs/extensions.md) | The `Extension` port, its build phases and hooks, and how to write your own |
 | [HTTP API](docs/http-api.md) | The framework-agnostic handlers, DTOs, JSON shapes and the error to status mapping |
-| [Configuration](docs/configuration.md) | Every `AUTH_*` variable, `RawConfig`, the loaders and validation rules |
+| [Configuration](docs/configuration.md) | Every `AUTH_*` variable, the YAML configuration file, `RawConfig`, the loaders and validation rules |
 | [Storage ports](docs/storage-ports.md) | The repository contracts for writing your own storage adapter |
 | [Development](docs/development.md) | Workspace layout, the testkit, running tests, CI and releases |
 
@@ -107,4 +115,4 @@ Each adapter crate has its own guide set. The [PostgreSQL adapter](adapters/post
 
 Every pull request to `main` runs the CI workflow in `.github/workflows/ci.yml`. It checks formatting, runs clippy with warnings denied across all targets and features, runs the test suite for every crate except the PostgreSQL adapter, runs the adapter's own tests against a PostgreSQL 16 service after applying the core, cluster and mfa migrations with `setup_db`, checks every feature of every crate on its own with `cargo hack`, builds the documentation with rustdoc warnings denied, and audits the dependency tree with `cargo audit`. A final summary job collects the results into a table and fails if any job failed or was cancelled.
 
-Pushing a tag that starts with `v` runs the release workflow in `.github/workflows/release.yml`. It first checks that the tag matches the version of the `z-auth` crate (for example `v0.3.0`, or `v0.3.0-rc.1` for a pre-release), then builds the workspace in release mode with all features for Linux x86_64 and macOS arm64. Each archive contains the `setup_db`, `keygen` and `mfa_keygen` binaries together with this README and `env.example`, and is published with a SHA-256 checksum on [GitHub Releases](https://github.com/eugenezimin/z-auth/releases). Tags containing a hyphen are published as pre-releases.
+Pushing a tag that starts with `v` runs the release workflow in `.github/workflows/release.yml`. It first checks that the tag matches the version of the `z-auth` crate (for example `v0.3.0`, or `v0.3.0-rc.1` for a pre-release), then builds the workspace in release mode with all features for Linux x86_64 and macOS arm64. Each archive contains the `setup_db`, `keygen` and `mfa_keygen` binaries together with this README, `env.example` and `z-auth.example.yaml`, and is published with a SHA-256 checksum on [GitHub Releases](https://github.com/eugenezimin/z-auth/releases). Tags containing a hyphen are published as pre-releases.

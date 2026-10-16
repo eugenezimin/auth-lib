@@ -1,19 +1,21 @@
 # Configuration
 
-`z-auth-mfa-sender` is configured through a `DeliveryConfig` value, which names the email provider, the SMS provider, the sender name used in messages and the timeout of each send. The value is normally read from `AUTH_MFA_*` environment variables by `DeliveryConfig::from_env`, but it can equally be read from any other source with `DeliveryConfig::from_lookup` or built directly in code. This guide lists every variable with its default and validation rule, explains which variables each provider requires, and describes how errors are reported and how credentials are kept out of logs.
+`z-auth-mfa-sender` is configured through a `DeliveryConfig` value, which names the email provider, the SMS provider, the sender name used in messages and the timeout of each send. The value is normally read from `AUTH_MFA_*` environment variables by `DeliveryConfig::from_env` or from the `mfa.delivery` section of a YAML configuration file by `DeliveryConfig::from_source`, but it can equally be read from any other source with `DeliveryConfig::from_lookup` or built directly in code. This guide lists every variable with its default and validation rule, explains which variables each provider requires, and describes how errors are reported and how credentials are kept out of logs.
 
 The variables share the `AUTH_MFA_` prefix with `z-auth-mfa`, but the two crates read disjoint sets. `MfaEnvLoader` ignores everything listed here, and `DeliveryConfig::from_env` ignores everything in the [z-auth-mfa configuration guide](../../docs/configuration.md) except `AUTH_MFA_TOTP_ISSUER`, which it consults as a fallback for the sender name.
 
 ## Loading
 
-Both loaders end in the same function. `from_env` is a thin wrapper that calls `from_lookup` with `std::env::var`, so the two always agree on defaults, validation and error messages.
+All three loaders end in the same function. `from_env` is a thin wrapper that calls `from_lookup` with `std::env::var`, and `from_source` feeds that function from a z-auth `ConfigSource`, so they always agree on defaults and validation.
 
 ```mermaid
 flowchart LR
     Env["process environment"] --> FromEnv["DeliveryConfig::from_env"]
     FromEnv -->|"std::env::var"| FromLookup["DeliveryConfig::from_lookup"]
-    Other["vault, file, map"] -->|"closure"| FromLookup
+    Other["vault, map"] -->|"closure"| FromLookup
+    File["YAML file (mfa.delivery) and environment"] --> FromSource["DeliveryConfig::from_source"]
     FromLookup --> Cfg["DeliveryConfig"]
+    FromSource --> Cfg
     Code["struct literal in code"] --> Cfg
     Cfg --> Build["build / email_sender / sms_sender"]
     Build --> Sender["Arc of dyn CodeSender"]
@@ -23,19 +25,46 @@ flowchart LR
 
 The loader checks the timeout first, then resolves the sender name, then the email provider and finally the SMS provider, and it stops at the first problem. A deployment with several mistakes therefore sees them one at a time, in that order.
 
+`from_source` reads the `mfa.delivery` section of a `ConfigSource`, the YAML configuration file described in [the core configuration guide](../../../../docs/configuration.md#configuration-file), with the environment layered on top. The section sits inside z-auth-mfa's own `mfa` section, which z-auth-mfa leaves alone, and its paths are listed in the tables below. A variable that is set wins over the file, and the blank rule applies to each layer on its own, so a blank variable does not hide a value in the file. A key in `mfa.delivery` that the crate does not know fails the load.
+
+```rust
+use z_auth::conf::config::ConfigSource;
+use z_auth_mfa_sender::DeliveryConfig;
+
+let source = ConfigSource::standard()?; // AUTH_CONFIG_FILE, then the environment
+let delivery = DeliveryConfig::from_source(&source)?;
+```
+
+```yaml
+mfa:
+  delivery:
+    sender_name: Acme
+    email:
+      provider: postmark
+      from: no-reply@acme.example
+      postmark:
+        server_token: ~        # AUTH_MFA_POSTMARK_SERVER_TOKEN from the environment
+    sms:
+      provider: twilio
+      twilio:
+        account_sid: AC...
+        auth_token: ~          # AUTH_MFA_TWILIO_AUTH_TOKEN from the environment
+        messaging_service_sid: MG...
+```
+
 Like z-auth's other loaders, `from_env` never reads a `.env` file. The process environment is the only source, and a host that keeps its settings in `.env` during development loads the file itself before calling the loader, for example with the dotenvy crate. A configuration built in code bypasses the loader entirely, along with its validation, which the [README](../README.md) discusses together with an example.
 
 ## General variables
 
 These variables apply whatever the providers are.
 
-| Variable | Default | Validation | Purpose |
-|---|---|---|---|
-| `AUTH_MFA_EMAIL_PROVIDER` | `log` | `log`, `smtp`, `sendgrid`, `postmark` or `mailgun` | Which provider delivers email codes |
-| `AUTH_MFA_SMS_PROVIDER` | `log` | `log`, `twilio` or `webhook` | Which provider delivers SMS codes |
-| `AUTH_MFA_SENDER_NAME` | See the fallback chain below | Any non-blank string | The name in email subjects, in SMS texts and as the From display name |
-| `AUTH_MFA_EMAIL_FROM` | None | A single bare email address | The From address, required by every email provider except `log` |
-| `AUTH_MFA_DELIVERY_TIMEOUT_SECS` | `10` | An integer greater than 0 | The time limit of one send |
+| Variable | Path under `mfa.delivery` | Default | Validation | Purpose |
+|---|---|---|---|---|
+| `AUTH_MFA_EMAIL_PROVIDER` | `email.provider` | `log` | `log`, `smtp`, `sendgrid`, `postmark` or `mailgun` | Which provider delivers email codes |
+| `AUTH_MFA_SMS_PROVIDER` | `sms.provider` | `log` | `log`, `twilio` or `webhook` | Which provider delivers SMS codes |
+| `AUTH_MFA_SENDER_NAME` | `sender_name` | See the fallback chain below | Any non-blank string | The name in email subjects, in SMS texts and as the From display name |
+| `AUTH_MFA_EMAIL_FROM` | `email.from` | None | A single bare email address | The From address, required by every email provider except `log` |
+| `AUTH_MFA_DELIVERY_TIMEOUT_SECS` | `timeout_secs` | `10` | An integer greater than 0 | The time limit of one send |
 
 `AUTH_MFA_EMAIL_FROM` is a bare address such as `no-reply@acme.example`, never a `Name <address>` form, because the display name comes from the sender name. The loader accepts it when it is at most 254 characters long, contains no whitespace and none of the characters `<`, `>`, `,`, `;` and `"`, and has a non-empty local part before the `@` and a domain after it that contains a dot, does not begin or end with a dot and contains no second `@`. That rule rejects `no-reply@localhost`, which is worth knowing when pointing the service at a local mail catcher. The address must also be one the provider is willing to send from, typically a verified sender or an address on a verified domain, and the provider reports that problem only at the first send.
 
@@ -55,39 +84,39 @@ flowchart TD
     C -->|"no"| D["z-auth"]
 ```
 
-The chain reads the variables themselves, not the validated settings of the other crates. If `AUTH_JWT_ISSUER` is unset, the core uses its own default issuer, and the delivery crate independently arrives at the same `z-auth`. The name is used verbatim and is escaped where the format requires it, in the HTML body and in the quoted display names sent to Postmark and Mailgun.
+With `from_source` each step also looks in the file, at `mfa.delivery.sender_name`, `mfa.totp.issuer` and `auth.jwt.issuer` in turn, and a variable still wins over the file at every step. The chain reads the variables themselves, not the validated settings of the other crates. If `AUTH_JWT_ISSUER` is unset, the core uses its own default issuer, and the delivery crate independently arrives at the same `z-auth`. The name is used verbatim and is escaped where the format requires it, in the HTML body and in the quoted display names sent to Postmark and Mailgun.
 
 ## Email provider variables
 
 Each email provider other than `log` requires `AUTH_MFA_EMAIL_FROM` in addition to the variables below. The variables of providers that are not selected are ignored, so they can stay in a shared environment file without effect.
 
-| Variable | Provider | Default | Requirement and validation |
-|---|---|---|---|
-| `AUTH_MFA_SMTP_HOST` | `smtp` | None | Required, the server's host name, also used to verify its certificate |
-| `AUTH_MFA_SMTP_SECURITY` | `smtp` | `starttls` | `starttls`, `tls` or `none` |
-| `AUTH_MFA_SMTP_PORT` | `smtp` | `587`, `465` or `25` by security mode | A port number that fits in 16 bits |
-| `AUTH_MFA_SMTP_USERNAME` | `smtp` | None | Optional, set together with `AUTH_MFA_SMTP_PASSWORD` or not at all |
-| `AUTH_MFA_SMTP_PASSWORD` | `smtp` | None | Optional, set together with `AUTH_MFA_SMTP_USERNAME` or not at all |
-| `AUTH_MFA_SENDGRID_API_KEY` | `sendgrid` | None | Required, an API key with the Mail Send permission |
-| `AUTH_MFA_POSTMARK_SERVER_TOKEN` | `postmark` | None | Required, the server API token |
-| `AUTH_MFA_POSTMARK_MESSAGE_STREAM` | `postmark` | `outbound` | Any non-blank stream ID |
-| `AUTH_MFA_MAILGUN_API_KEY` | `mailgun` | None | Required, a Mailgun API key |
-| `AUTH_MFA_MAILGUN_DOMAIN` | `mailgun` | None | Required, the sending domain configured in Mailgun |
-| `AUTH_MFA_MAILGUN_REGION` | `mailgun` | `us` | `us` or `eu` |
+| Variable | Path under `mfa.delivery` | Provider | Default | Requirement and validation |
+|---|---|---|---|---|
+| `AUTH_MFA_SMTP_HOST` | `email.smtp.host` | `smtp` | None | Required, the server's host name, also used to verify its certificate |
+| `AUTH_MFA_SMTP_SECURITY` | `email.smtp.security` | `smtp` | `starttls` | `starttls`, `tls` or `none` |
+| `AUTH_MFA_SMTP_PORT` | `email.smtp.port` | `smtp` | `587`, `465` or `25` by security mode | A port number that fits in 16 bits |
+| `AUTH_MFA_SMTP_USERNAME` | `email.smtp.username` | `smtp` | None | Optional, set together with `AUTH_MFA_SMTP_PASSWORD` or not at all |
+| `AUTH_MFA_SMTP_PASSWORD` | `email.smtp.password` | `smtp` | None | Optional, set together with `AUTH_MFA_SMTP_USERNAME` or not at all |
+| `AUTH_MFA_SENDGRID_API_KEY` | `email.sendgrid.api_key` | `sendgrid` | None | Required, an API key with the Mail Send permission |
+| `AUTH_MFA_POSTMARK_SERVER_TOKEN` | `email.postmark.server_token` | `postmark` | None | Required, the server API token |
+| `AUTH_MFA_POSTMARK_MESSAGE_STREAM` | `email.postmark.message_stream` | `postmark` | `outbound` | Any non-blank stream ID |
+| `AUTH_MFA_MAILGUN_API_KEY` | `email.mailgun.api_key` | `mailgun` | None | Required, a Mailgun API key |
+| `AUTH_MFA_MAILGUN_DOMAIN` | `email.mailgun.domain` | `mailgun` | None | Required, the sending domain configured in Mailgun |
+| `AUTH_MFA_MAILGUN_REGION` | `email.mailgun.region` | `mailgun` | `us` | `us` or `eu` |
 
 The SMTP username and password follow a both-or-neither rule. Both set means the client authenticates, neither set means it talks to an unauthenticated relay, and exactly one set is an error that names the missing partner. The port default follows the security mode, 587 for `starttls`, 465 for `tls` and 25 for `none`, and an explicit port overrides it. The [email guide](email.md) explains the modes and what each provider sends.
 
 ## SMS provider variables
 
-| Variable | Provider | Default | Requirement and validation |
-|---|---|---|---|
-| `AUTH_MFA_TWILIO_ACCOUNT_SID` | `twilio` | None | Required, the account SID (`AC...`) |
-| `AUTH_MFA_TWILIO_AUTH_TOKEN` | `twilio` | None | Required, the account's auth token |
-| `AUTH_MFA_TWILIO_FROM` | `twilio` | None | Exactly one of this and the Messaging Service SID, a Twilio number in E.164 form or an alphanumeric sender ID |
-| `AUTH_MFA_TWILIO_MESSAGING_SERVICE_SID` | `twilio` | None | Exactly one of this and `AUTH_MFA_TWILIO_FROM`, a Messaging Service SID (`MG...`) |
-| `AUTH_MFA_SMS_WEBHOOK_URL` | `webhook` | None | Required, a URL beginning with `http://` or `https://` |
-| `AUTH_MFA_SMS_WEBHOOK_SECRET` | `webhook` | None | Optional, signs each request with HMAC-SHA256 when set |
-| `AUTH_MFA_SMS_WEBHOOK_BEARER_TOKEN` | `webhook` | None | Optional, sent as an `Authorization` bearer token when set |
+| Variable | Path under `mfa.delivery` | Provider | Default | Requirement and validation |
+|---|---|---|---|---|
+| `AUTH_MFA_TWILIO_ACCOUNT_SID` | `sms.twilio.account_sid` | `twilio` | None | Required, the account SID (`AC...`) |
+| `AUTH_MFA_TWILIO_AUTH_TOKEN` | `sms.twilio.auth_token` | `twilio` | None | Required, the account's auth token |
+| `AUTH_MFA_TWILIO_FROM` | `sms.twilio.from` | `twilio` | None | Exactly one of this and the Messaging Service SID, a Twilio number in E.164 form or an alphanumeric sender ID |
+| `AUTH_MFA_TWILIO_MESSAGING_SERVICE_SID` | `sms.twilio.messaging_service_sid` | `twilio` | None | Exactly one of this and `AUTH_MFA_TWILIO_FROM`, a Messaging Service SID (`MG...`) |
+| `AUTH_MFA_SMS_WEBHOOK_URL` | `sms.webhook.url` | `webhook` | None | Required, a URL beginning with `http://` or `https://` |
+| `AUTH_MFA_SMS_WEBHOOK_SECRET` | `sms.webhook.secret` | `webhook` | None | Optional, signs each request with HMAC-SHA256 when set |
+| `AUTH_MFA_SMS_WEBHOOK_BEARER_TOKEN` | `sms.webhook.bearer_token` | `webhook` | None | Optional, sent as an `Authorization` bearer token when set |
 
 Twilio needs to know where messages come from, and there are two mutually exclusive ways to say it. `AUTH_MFA_TWILIO_FROM` names a sending number or sender ID directly, while `AUTH_MFA_TWILIO_MESSAGING_SERVICE_SID` lets a Messaging Service choose the number. Setting neither or both is an error. The loader does not check the format of either value, so a malformed number is reported by Twilio at the first send.
 
@@ -117,7 +146,7 @@ The names in the diagram omit the common `AUTH_MFA_` prefix for brevity. `log` r
 
 ## Errors
 
-The loaders return z-auth's `ConfigError`, with the same two variants and the same wording as the core's loaders. `ConfigError::Missing` reports a variable that must be set, together with the reason it is required, and `ConfigError::Parse` reports a value that is present but unusable, keyed by the variable's name. The table shows the messages the loader produces, as printed through `Display`.
+The loaders return z-auth's `ConfigError`, with the same two variants and the same wording as the core's loaders. `ConfigError::Missing` reports a variable that must be set, together with the reason it is required, and `ConfigError::Parse` reports a value that is present but unusable, keyed by the variable's name. The table shows the messages the loader produces from the environment, as printed through `Display`.
 
 | Situation | Message |
 |---|---|
@@ -136,6 +165,8 @@ The loaders return z-auth's `ConfigError`, with the same two variants and the sa
 
 The last row shows that numeric parse errors carry the standard library's reason, so `AUTH_MFA_DELIVERY_TIMEOUT_SECS=abc` reports `invalid digit found in string`. A value in an error message is never a credential, because secrets are not validated beyond being present.
 
+With `from_source` and a file in use, the messages say where to look in both places. A value from the file is keyed by its path and file, as in `failed to parse configuration field 'mfa.delivery.email.smtp.port in z-auth.yaml': invalid digit found in string`, while a value from the environment is still keyed by the variable. A missing setting names the variable and the path, as in `missing required configuration field: AUTH_MFA_SMTP_HOST or mfa.delivery.email.smtp.host (required by AUTH_MFA_EMAIL_PROVIDER=smtp)`.
+
 A few problems surface only in `build`, as `AuthError::Config`. They are a provider that is not compiled in (for a configuration built in code), an SMTP From address or host that `lettre` cannot use, an unparsable webhook URL, and a failure to construct the HTTP client. Each message names the component, for example `configuration error: SMTP From address "..."` followed by the parser's reason.
 
 ## Secret redaction
@@ -146,7 +177,7 @@ The redaction is limited to those fields. The SMTP username, the Twilio account 
 
 ## The template
 
-The repository's `env.example` contains a commented section for this crate, headed `z-auth-mfa-sender (optional)`, with every variable above and its default. A Postmark and Twilio deployment needs only a handful of them.
+The repository's `env.example` contains a commented section for this crate, headed `z-auth-mfa-sender (optional)`, with every variable above and its default, and `z-auth.example.yaml` holds the same settings under `mfa.delivery`. A Postmark and Twilio deployment needs only a handful of them.
 
 ```env
 AUTH_MFA_EMAIL_PROVIDER=postmark

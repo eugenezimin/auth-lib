@@ -1,6 +1,6 @@
 # z-auth-mfa
 
-`z-auth` verifies passwords and manages the sessions that follow. `z-auth-mfa` adds a second factor on top of that. The host application imports the crate, builds an `Mfa` value and registers it with `ZAuth` through the core's `Extension` port, so the core never depends on this crate and a service that does not need two-factor authentication pays nothing for it. Everything the crate needs is configured through its own `AUTH_MFA_*` environment variables, or through a `RawMfaConfig` filled in by code, and is kept separate from the core's `AuthConfig`.
+`z-auth` verifies passwords and manages the sessions that follow. `z-auth-mfa` adds a second factor on top of that. The host application imports the crate, builds an `Mfa` value and registers it with `ZAuth` through the core's `Extension` port, so the core never depends on this crate and a service that does not need two-factor authentication pays nothing for it. Everything the crate needs is configured through its own `AUTH_MFA_*` environment variables, the `mfa` section of a YAML configuration file read by `MfaSourceLoader`, or a `RawMfaConfig` filled in by code, and is kept separate from the core's `AuthConfig`.
 
 Once registered, the extension changes what a login returns. A user who has enrolled a factor no longer receives tokens for a correct password. The password step yields a short-lived challenge instead, and the session is opened only when the client answers that challenge with a valid code. Sessions opened this way carry `mfa` in their `amr` claim, which lets the host guard sensitive routes with `Authorizer::require_mfa`. Enrollment, factor management and recovery codes are offered through the `MfaService` trait and a set of framework-agnostic HTTP handlers.
 
@@ -91,7 +91,7 @@ z_auth_mfa
 │   ├── handlers             framework-agnostic handlers, including send_login_code
 │   └── mapping              conversions between DTOs and domain models
 ├── config
-│   ├── loaders              MfaConfigLoader, MfaEnvLoader, MfaDirectLoader, validation
+│   ├── loaders              MfaConfigLoader, MfaEnvLoader, MfaSourceLoader, MfaDirectLoader, validation
 │   └── model                MfaSettings, RawMfaConfig, Enforcement, Unenrolled, ...
 ├── constants                defaults, limits and AUTH_MFA_* names
 ├── crypto
@@ -128,6 +128,6 @@ The crate ships no database code. Storage is the `MfaRepository` port, whose con
 
 ## Guides
 
-The guides in `docs/` cover the crate in depth. The [login flow](docs/login-flow.md) explains the gate's decision, challenge tokens, the verification order and the HTTP endpoints of the two-step login. [Enrollment and factor management](docs/enrollment.md) covers `MfaService`, step-up proofs, recovery codes and the enrollment endpoints. [Security](docs/security.md) describes TOTP verification, sealing, keyed hashing, code generation and the guarantees the crate makes. [Configuration](docs/configuration.md) lists every `AUTH_MFA_*` variable with its default and validation. [Ports](docs/ports.md) documents `MfaRepository`, `CodeSender` and `SecretSealer` for implementers.
+The guides in `docs/` cover the crate in depth. The [login flow](docs/login-flow.md) explains the gate's decision, challenge tokens, the verification order and the HTTP endpoints of the two-step login. [Enrollment and factor management](docs/enrollment.md) covers `MfaService`, step-up proofs, recovery codes and the enrollment endpoints. [Security](docs/security.md) describes TOTP verification, sealing, keyed hashing, code generation and the guarantees the crate makes. [Configuration](docs/configuration.md) lists every `AUTH_MFA_*` variable with its path in the configuration file, its default and validation. [Ports](docs/ports.md) documents `MfaRepository`, `CodeSender` and `SecretSealer` for implementers.
 
 For the core concepts this crate builds on, see the [extensions guide](../../docs/extensions.md), [sessions and tokens](../../docs/sessions-and-tokens.md), [authorization](../../docs/authorization.md) and the [HTTP API](../../docs/http-api.md).

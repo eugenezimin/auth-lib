@@ -110,7 +110,7 @@ fn sms_only() -> Result<Arc<dyn CodeSender>, Box<dyn std::error::Error>> {
 
 ## Configuration from other sources
 
-`DeliveryConfig::from_lookup` performs exactly the same parsing and validation as `from_env`, but reads each variable through a closure instead of the process environment. It suits hosts that keep secrets in a vault or a configuration file. The closure below consults a map first and falls back to the environment.
+`DeliveryConfig::from_lookup` performs exactly the same parsing and validation as `from_env`, but reads each variable through a closure instead of the process environment. It suits hosts that keep secrets in a vault or another store keyed by variable name. The closure below consults a map first and falls back to the environment. For the YAML configuration file shared by the z-auth crates, `DeliveryConfig::from_source(&source)` reads the `mfa.delivery` section with the environment on top, as described in the [configuration guide](docs/configuration.md).
 
 ```rust
 use std::collections::HashMap;
@@ -168,7 +168,7 @@ z_auth_mfa_sender
 ├── DeliveryConfig, EmailProvider, SmsProvider, Secret   re-exported from config
 ├── LogCodeSender                                        re-exported from log
 ├── build, email_sender, sms_sender, MethodRouter, mask  re-exported from the private router module
-├── config      DeliveryConfig::from_env, from_lookup, SmtpConfig, SmtpSecurity, SendGridConfig,
+├── config      DeliveryConfig::from_env, from_lookup, from_source, SmtpConfig, SmtpSecurity, SendGridConfig,
 │               PostmarkConfig, MailgunConfig, TwilioConfig, TwilioSender, WebhookConfig
 ├── constants   defaults, provider endpoints, webhook header names, AUTH_MFA_* variable names
 ├── email       SmtpSender and build_email (smtp), SendGridSender, PostmarkSender, MailgunSender
