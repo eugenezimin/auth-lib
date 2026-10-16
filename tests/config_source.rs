@@ -261,3 +261,51 @@ fn the_example_file_loads_with_the_defaults() {
     let defaults = z_auth::conf::config::RawConfig::default().build().unwrap();
     assert_eq!(format!("{from_file:?}"), format!("{defaults:?}"));
 }
+
+const PROVIDERS: &str = r#"
+sso:
+  callback_url: https://app.example.com/callback
+  providers:
+    google:
+      kind: oidc
+      client_id: g
+    github:
+      kind: github
+      claims:
+        email: /email
+    empty: ~
+"#;
+
+#[test]
+fn named_subsections_are_listed() {
+    let source = ConfigSource::yaml_str(PROVIDERS).unwrap();
+    assert_eq!(
+        source.children("sso.providers"),
+        ["empty", "github", "google"]
+    );
+    assert!(source.children("sso.missing").is_empty());
+    assert!(
+        ConfigSource::from_lookup(|_| None)
+            .children("sso")
+            .is_empty()
+    );
+}
+
+#[test]
+fn settings_named_at_run_time_are_checked() {
+    let source = ConfigSource::yaml_str(PROVIDERS).unwrap();
+    source
+        .check_keys("sso.providers.github", &["kind", "claims.email"])
+        .unwrap();
+    source.check_keys("sso.providers.empty", &["kind"]).unwrap();
+    let key = parse_error_key(source.check_keys("sso.providers.google", &["kind"]));
+    assert!(key.starts_with("sso.providers.google.client_id"), "{key}");
+    let key = parse_error_key(source.check_keys("sso.providers.github", &["kind", "claims.name"]));
+    assert!(
+        key.starts_with("sso.providers.github.claims.email"),
+        "{key}"
+    );
+    // A scalar where a mapping belongs is still refused.
+    let scalar = ConfigSource::yaml_str("sso: 1\n").unwrap();
+    assert!(scalar.check_keys("sso", &[]).is_err());
+}
