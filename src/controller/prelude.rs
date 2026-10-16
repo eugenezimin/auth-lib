@@ -1,7 +1,8 @@
 //! Convenience re-exports: `use z_auth::prelude::*;`
 
 pub use crate::conf::config::{
-    AuthConfig, AuthzMode, ConfigLoader, DirectLoader, EnvLoader, RawConfig,
+    AuthConfig, AuthzMode, ConfigLoader, ConfigSource, DirectLoader, EnvLoader, RawConfig,
+    SourceLoader,
 };
 pub use crate::controller::api::ApiError;
 pub use crate::controller::extension::{Extension, ExtensionReport};
