@@ -38,3 +38,5 @@ hex     = { version = "0.4", optional = true }
 tokio    = { version = "1", features = ["macros", "rt-multi-thread"] }
 uuid     = { version = "1", features = ["v4"] }
 wiremock = "0.6"
+# ConfigSource::yaml_str for the configuration-file tests.
+z-auth   = { path = "../../..", default-features = false, features = ["yaml"] }

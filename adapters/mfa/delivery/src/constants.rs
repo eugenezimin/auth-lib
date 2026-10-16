@@ -1,6 +1,9 @@
-//! z-auth-mfa-sender constants: defaults, provider endpoints and the
+//! z-auth-mfa-sender constants: defaults, provider endpoints, the
 //! `AUTH_MFA_*` environment variables read by
-//! [`DeliveryConfig::from_env`](crate::DeliveryConfig::from_env).
+//! [`DeliveryConfig::from_env`](crate::DeliveryConfig::from_env) and their
+//! paths in the `mfa.delivery` section of the configuration file.
+
+use z_auth::conf::config::Key;
 
 // ── Defaults ──────────────────────────────────────────────────────────────────
 
@@ -72,3 +75,54 @@ pub const ENV_TWILIO_MESSAGING_SERVICE_SID: &str = "AUTH_MFA_TWILIO_MESSAGING_SE
 pub const ENV_SMS_WEBHOOK_URL: &str = "AUTH_MFA_SMS_WEBHOOK_URL";
 pub const ENV_SMS_WEBHOOK_SECRET: &str = "AUTH_MFA_SMS_WEBHOOK_SECRET";
 pub const ENV_SMS_WEBHOOK_BEARER_TOKEN: &str = "AUTH_MFA_SMS_WEBHOOK_BEARER_TOKEN";
+
+// ── Configuration file (read by `DeliveryConfig::from_source`) ───────────────
+
+/// This crate's section in the configuration file, inside z-auth-mfa's.
+pub const SECTION: &str = "mfa.delivery";
+
+/// Every delivery setting: its environment variable and its path in the
+/// file.  The last two are the sender-name fallbacks, read from z-auth-mfa's
+/// and the core's sections.
+pub const KEYS: &[Key] = &[
+    Key::new(ENV_SENDER_NAME, "mfa.delivery.sender_name"),
+    Key::new(ENV_TIMEOUT_SECS, "mfa.delivery.timeout_secs"),
+    Key::new(ENV_EMAIL_PROVIDER, "mfa.delivery.email.provider"),
+    Key::new(ENV_EMAIL_FROM, "mfa.delivery.email.from"),
+    Key::new(ENV_SMTP_HOST, "mfa.delivery.email.smtp.host"),
+    Key::new(ENV_SMTP_PORT, "mfa.delivery.email.smtp.port"),
+    Key::new(ENV_SMTP_SECURITY, "mfa.delivery.email.smtp.security"),
+    Key::new(ENV_SMTP_USERNAME, "mfa.delivery.email.smtp.username"),
+    Key::new(ENV_SMTP_PASSWORD, "mfa.delivery.email.smtp.password"),
+    Key::new(ENV_SENDGRID_API_KEY, "mfa.delivery.email.sendgrid.api_key"),
+    Key::new(
+        ENV_POSTMARK_SERVER_TOKEN,
+        "mfa.delivery.email.postmark.server_token",
+    ),
+    Key::new(
+        ENV_POSTMARK_MESSAGE_STREAM,
+        "mfa.delivery.email.postmark.message_stream",
+    ),
+    Key::new(ENV_MAILGUN_API_KEY, "mfa.delivery.email.mailgun.api_key"),
+    Key::new(ENV_MAILGUN_DOMAIN, "mfa.delivery.email.mailgun.domain"),
+    Key::new(ENV_MAILGUN_REGION, "mfa.delivery.email.mailgun.region"),
+    Key::new(ENV_SMS_PROVIDER, "mfa.delivery.sms.provider"),
+    Key::new(
+        ENV_TWILIO_ACCOUNT_SID,
+        "mfa.delivery.sms.twilio.account_sid",
+    ),
+    Key::new(ENV_TWILIO_AUTH_TOKEN, "mfa.delivery.sms.twilio.auth_token"),
+    Key::new(ENV_TWILIO_FROM, "mfa.delivery.sms.twilio.from"),
+    Key::new(
+        ENV_TWILIO_MESSAGING_SERVICE_SID,
+        "mfa.delivery.sms.twilio.messaging_service_sid",
+    ),
+    Key::new(ENV_SMS_WEBHOOK_URL, "mfa.delivery.sms.webhook.url"),
+    Key::new(ENV_SMS_WEBHOOK_SECRET, "mfa.delivery.sms.webhook.secret"),
+    Key::new(
+        ENV_SMS_WEBHOOK_BEARER_TOKEN,
+        "mfa.delivery.sms.webhook.bearer_token",
+    ),
+    Key::new(ENV_SENDER_NAME_FALLBACKS[0], "mfa.totp.issuer"),
+    Key::new(ENV_SENDER_NAME_FALLBACKS[1], "auth.jwt.issuer"),
+];

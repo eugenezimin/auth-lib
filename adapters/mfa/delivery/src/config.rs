@@ -7,7 +7,7 @@ use std::fmt;
 use std::str::FromStr;
 use std::time::Duration;
 
-use z_auth::conf::config::ConfigError;
+use z_auth::conf::config::{ConfigError, ConfigSource, Key, Setting};
 
 use crate::constants::*;
 
@@ -200,9 +200,38 @@ impl DeliveryConfig {
 
     /// Like [`Self::from_env`], reading variables through `get`.
     pub fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Result<Self, ConfigError> {
-        let env = Env(&get);
+        let get = |key: &str| {
+            get(key).map(|value| Setting {
+                value,
+                origin: key.into(),
+            })
+        };
+        Self::read(&Env {
+            get: &get,
+            paths: None,
+        })
+    }
+
+    /// Reads the `mfa.delivery` section of a [`ConfigSource`]; the
+    /// environment overrides the file.  The sender-name fallbacks are
+    /// `mfa.totp.issuer` and `auth.jwt.issuer`.
+    pub fn from_source(source: &ConfigSource) -> Result<Self, ConfigError> {
+        let section = source.section(SECTION, KEYS, &[])?;
+        let get = |key: &str| section.get_non_blank(key);
+        Self::read(&Env {
+            get: &get,
+            paths: source.has_file().then_some(KEYS),
+        })
+    }
+
+    fn read(env: &Env) -> Result<Self, ConfigError> {
         let timeout = match env.parse::<u64>(ENV_TIMEOUT_SECS)? {
-            Some(0) => return Err(invalid(ENV_TIMEOUT_SECS, "must be greater than 0")),
+            Some(0) => {
+                return Err(invalid(
+                    &env.origin(ENV_TIMEOUT_SECS),
+                    "must be greater than 0",
+                ));
+            }
             Some(s) => Duration::from_secs(s),
             None => Duration::from_secs(DEFAULT_TIMEOUT_SECS),
         };
@@ -213,8 +242,8 @@ impl DeliveryConfig {
         Ok(Self {
             sender_name,
             timeout,
-            email: email_provider(&env)?,
-            sms: sms_provider(&env)?,
+            email: email_provider(env)?,
+            sms: sms_provider(env)?,
         })
     }
 }
@@ -226,13 +255,17 @@ fn email_provider(env: &Env) -> Result<EmailProvider, ConfigError> {
         .to_ascii_lowercase();
     let from = || -> Result<String, ConfigError> {
         let from = env.req(ENV_EMAIL_FROM, ENV_EMAIL_PROVIDER, &provider)?;
-        validate_email(&from).map_err(|reason| invalid(ENV_EMAIL_FROM, reason))?;
+        validate_email(&from).map_err(|reason| invalid(&env.origin(ENV_EMAIL_FROM), reason))?;
         Ok(from)
     };
     Ok(match provider.as_str() {
         "log" => EmailProvider::Log,
         "smtp" => {
-            compiled(cfg!(feature = "smtp"), ENV_EMAIL_PROVIDER, "smtp")?;
+            compiled(
+                cfg!(feature = "smtp"),
+                &env.origin(ENV_EMAIL_PROVIDER),
+                "smtp",
+            )?;
             let security = env
                 .parse(ENV_SMTP_SECURITY)?
                 .unwrap_or(SmtpSecurity::StartTls);
@@ -241,12 +274,16 @@ fn email_provider(env: &Env) -> Result<EmailProvider, ConfigError> {
                 (None, None) => None,
                 (Some(_), None) => {
                     return Err(ConfigError::Missing(format!(
-                        "{ENV_SMTP_PASSWORD} (set with {ENV_SMTP_USERNAME})"
+                        "{} (set with {})",
+                        env.name(ENV_SMTP_PASSWORD),
+                        env.name(ENV_SMTP_USERNAME)
                     )));
                 }
                 (None, Some(_)) => {
                     return Err(ConfigError::Missing(format!(
-                        "{ENV_SMTP_USERNAME} (set with {ENV_SMTP_PASSWORD})"
+                        "{} (set with {})",
+                        env.name(ENV_SMTP_USERNAME),
+                        env.name(ENV_SMTP_PASSWORD)
                     )));
                 }
             };
@@ -259,7 +296,11 @@ fn email_provider(env: &Env) -> Result<EmailProvider, ConfigError> {
             })
         }
         "sendgrid" => {
-            compiled(cfg!(feature = "sendgrid"), ENV_EMAIL_PROVIDER, "sendgrid")?;
+            compiled(
+                cfg!(feature = "sendgrid"),
+                &env.origin(ENV_EMAIL_PROVIDER),
+                "sendgrid",
+            )?;
             EmailProvider::SendGrid(SendGridConfig {
                 api_key: Secret(env.req(ENV_SENDGRID_API_KEY, ENV_EMAIL_PROVIDER, "sendgrid")?),
                 from: from()?,
@@ -267,7 +308,11 @@ fn email_provider(env: &Env) -> Result<EmailProvider, ConfigError> {
             })
         }
         "postmark" => {
-            compiled(cfg!(feature = "postmark"), ENV_EMAIL_PROVIDER, "postmark")?;
+            compiled(
+                cfg!(feature = "postmark"),
+                &env.origin(ENV_EMAIL_PROVIDER),
+                "postmark",
+            )?;
             EmailProvider::Postmark(PostmarkConfig {
                 server_token: Secret(env.req(
                     ENV_POSTMARK_SERVER_TOKEN,
@@ -282,7 +327,11 @@ fn email_provider(env: &Env) -> Result<EmailProvider, ConfigError> {
             })
         }
         "mailgun" => {
-            compiled(cfg!(feature = "mailgun"), ENV_EMAIL_PROVIDER, "mailgun")?;
+            compiled(
+                cfg!(feature = "mailgun"),
+                &env.origin(ENV_EMAIL_PROVIDER),
+                "mailgun",
+            )?;
             let api_base = match env
                 .opt(ENV_MAILGUN_REGION)
                 .map(|r| r.to_ascii_lowercase())
@@ -290,7 +339,12 @@ fn email_provider(env: &Env) -> Result<EmailProvider, ConfigError> {
             {
                 None | Some("us") => MAILGUN_API_US,
                 Some("eu") => MAILGUN_API_EU,
-                Some(_) => return Err(invalid(ENV_MAILGUN_REGION, "expected us or eu")),
+                Some(_) => {
+                    return Err(invalid(
+                        &env.origin(ENV_MAILGUN_REGION),
+                        "expected us or eu",
+                    ));
+                }
             };
             EmailProvider::Mailgun(MailgunConfig {
                 api_key: Secret(env.req(ENV_MAILGUN_API_KEY, ENV_EMAIL_PROVIDER, "mailgun")?),
@@ -301,7 +355,7 @@ fn email_provider(env: &Env) -> Result<EmailProvider, ConfigError> {
         }
         _ => {
             return Err(invalid(
-                ENV_EMAIL_PROVIDER,
+                &env.origin(ENV_EMAIL_PROVIDER),
                 "expected log, smtp, sendgrid, postmark or mailgun",
             ));
         }
@@ -316,7 +370,11 @@ fn sms_provider(env: &Env) -> Result<SmsProvider, ConfigError> {
     Ok(match provider.as_str() {
         "log" => SmsProvider::Log,
         "twilio" => {
-            compiled(cfg!(feature = "twilio"), ENV_SMS_PROVIDER, "twilio")?;
+            compiled(
+                cfg!(feature = "twilio"),
+                &env.origin(ENV_SMS_PROVIDER),
+                "twilio",
+            )?;
             let sender = match (
                 env.opt(ENV_TWILIO_FROM),
                 env.opt(ENV_TWILIO_MESSAGING_SERVICE_SID),
@@ -325,13 +383,14 @@ fn sms_provider(env: &Env) -> Result<SmsProvider, ConfigError> {
                 (None, Some(sid)) => TwilioSender::MessagingService(sid),
                 (None, None) => {
                     return Err(ConfigError::Missing(format!(
-                        "{ENV_TWILIO_FROM} or {ENV_TWILIO_MESSAGING_SERVICE_SID} \
-                         (required by {ENV_SMS_PROVIDER}=twilio)"
+                        "{} or {} (required by {ENV_SMS_PROVIDER}=twilio)",
+                        env.name(ENV_TWILIO_FROM),
+                        env.name(ENV_TWILIO_MESSAGING_SERVICE_SID)
                     )));
                 }
                 (Some(_), Some(_)) => {
                     return Err(invalid(
-                        ENV_TWILIO_FROM,
+                        &env.origin(ENV_TWILIO_FROM),
                         format!("set exactly one of it and {ENV_TWILIO_MESSAGING_SERVICE_SID}"),
                     ));
                 }
@@ -344,11 +403,18 @@ fn sms_provider(env: &Env) -> Result<SmsProvider, ConfigError> {
             })
         }
         "webhook" => {
-            compiled(cfg!(feature = "webhook"), ENV_SMS_PROVIDER, "webhook")?;
+            compiled(
+                cfg!(feature = "webhook"),
+                &env.origin(ENV_SMS_PROVIDER),
+                "webhook",
+            )?;
             let url = env.req(ENV_SMS_WEBHOOK_URL, ENV_SMS_PROVIDER, "webhook")?;
             let lower = url.to_ascii_lowercase();
             if !(lower.starts_with("http://") || lower.starts_with("https://")) {
-                return Err(invalid(ENV_SMS_WEBHOOK_URL, "must be an http(s) URL"));
+                return Err(invalid(
+                    &env.origin(ENV_SMS_WEBHOOK_URL),
+                    "must be an http(s) URL",
+                ));
             }
             SmsProvider::Webhook(WebhookConfig {
                 url,
@@ -356,7 +422,12 @@ fn sms_provider(env: &Env) -> Result<SmsProvider, ConfigError> {
                 bearer_token: env.opt(ENV_SMS_WEBHOOK_BEARER_TOKEN).map(Secret),
             })
         }
-        _ => return Err(invalid(ENV_SMS_PROVIDER, "expected log, twilio or webhook")),
+        _ => {
+            return Err(invalid(
+                &env.origin(ENV_SMS_PROVIDER),
+                "expected log, twilio or webhook",
+            ));
+        }
     })
 }
 
@@ -395,20 +466,53 @@ fn invalid(key: &str, reason: impl fmt::Display) -> ConfigError {
     }
 }
 
-/// Variable lookups; blank values count as unset.
-struct Env<'a>(&'a dyn Fn(&str) -> Option<String>);
+/// Setting lookups; blank values count as unset.
+struct Env<'a> {
+    get: &'a dyn Fn(&str) -> Option<Setting>,
+    /// When the settings may come from a file: its keys, so that errors
+    /// about missing settings name the path as well as the variable.
+    paths: Option<&'a [Key]>,
+}
 
 impl Env<'_> {
+    fn setting(&self, key: &str) -> Option<Setting> {
+        (self.get)(key)
+            .map(|s| Setting {
+                value: s.value.trim().to_owned(),
+                origin: s.origin,
+            })
+            .filter(|s| !s.value.is_empty())
+    }
+
     fn opt(&self, key: &str) -> Option<String> {
-        (self.0)(key)
-            .map(|v| v.trim().to_owned())
-            .filter(|v| !v.is_empty())
+        self.setting(key).map(|s| s.value)
+    }
+
+    /// Where `key`'s value came from, for errors about it.
+    fn origin(&self, key: &str) -> String {
+        self.setting(key)
+            .map(|s| s.origin)
+            .unwrap_or_else(|| self.name(key))
+    }
+
+    /// `key`, or `key or <path>` when a file is in use.
+    fn name(&self, key: &str) -> String {
+        match self
+            .paths
+            .and_then(|keys| keys.iter().find(|k| k.env == key))
+        {
+            Some(k) => format!("{key} or {}", k.path),
+            None => key.into(),
+        }
     }
 
     /// `key`, required because `selector` is `provider`.
     fn req(&self, key: &str, selector: &str, provider: &str) -> Result<String, ConfigError> {
         self.opt(key).ok_or_else(|| {
-            ConfigError::Missing(format!("{key} (required by {selector}={provider})"))
+            ConfigError::Missing(format!(
+                "{} (required by {selector}={provider})",
+                self.name(key)
+            ))
         })
     }
 
@@ -417,8 +521,8 @@ impl Env<'_> {
         T: FromStr,
         T::Err: fmt::Display,
     {
-        self.opt(key)
-            .map(|v| v.parse::<T>().map_err(|e| invalid(key, e)))
+        self.setting(key)
+            .map(|s| s.value.parse::<T>().map_err(|e| invalid(&s.origin, e)))
             .transpose()
     }
 }

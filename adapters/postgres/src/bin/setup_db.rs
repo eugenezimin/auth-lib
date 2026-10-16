@@ -7,6 +7,8 @@
 //! Reads connection details from the environment (a `.env` file in the
 //! current directory is loaded first, if present).  Expected variables:
 //!   DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME (optional – defaults to "auth")
+//! When AUTH_CONFIG_FILE names a YAML file, its `database` section is read
+//! as well, and the variables above override it.
 //!
 //! 1. Creates the database if it does not exist.
 //! 2. Replaces a *legacy* schema (tables created before versioned
@@ -28,6 +30,7 @@ use std::ops::Range;
 use sqlx::PgPool;
 use sqlx::migrate::Migrator;
 use sqlx::postgres::PgPoolOptions;
+use z_auth::conf::config::ConfigSource;
 #[cfg(feature = "shared")]
 use z_auth_postgres::CLUSTER_MIGRATOR;
 #[cfg(feature = "mfa")]
@@ -159,7 +162,9 @@ async fn main() {
              --features mfa --bin setup_db -- --mfa",
         );
     }
-    let cfg = PgConfig::from_env().unwrap_or_else(|e| fatal(&e));
+    // AUTH_CONFIG_FILE's `database` section, with DB_* on top.
+    let source = ConfigSource::standard().unwrap_or_else(|e| fatal(&e.to_string()));
+    let cfg = PgConfig::from_source(&source).unwrap_or_else(|e| fatal(&e));
     let db_name = cfg.name.clone();
 
     println!("  Host     : {}:{}", cfg.host, cfg.port);
