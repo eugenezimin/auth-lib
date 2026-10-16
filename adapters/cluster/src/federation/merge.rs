@@ -65,6 +65,7 @@ fn reason_rank(r: RevocationReason) -> u8 {
         AccountDeleted => 9,
         RevokedTokenUsed => 10,
         ConcurrentRefresh => 11,
+        SecondFactorChanged => 12,
     }
 }
 
@@ -190,6 +191,18 @@ pub fn merge_session(
         .filter(|g| g.generation > keep_from)
         .collect();
 
+    // Fixed at login, so both copies normally agree; the union also keeps
+    // methods a copy from an older peer lacks.
+    let mut amr: Vec<String> = base
+        .session
+        .amr
+        .iter()
+        .chain(&incoming.session.amr)
+        .cloned()
+        .collect();
+    amr.sort();
+    amr.dedup();
+
     let s = &base.session;
     let merged = SessionAggregate {
         session: SyncSession {
@@ -204,6 +217,7 @@ pub fn merge_session(
             },
             created_ip: s.created_ip,
             user_agent: s.user_agent.clone(),
+            amr,
             current_generation,
             created_at: s.created_at.min(incoming.session.created_at),
             idle_expires_at: s.idle_expires_at.max(incoming.session.idle_expires_at),
@@ -326,6 +340,7 @@ mod tests {
                 end_reason: None,
                 created_ip: "10.0.0.1".parse().unwrap(),
                 user_agent: None,
+                amr: vec!["pwd".into()],
                 current_generation: generations.last().map(|g| g.generation).unwrap_or(1),
                 created_at: t(0),
                 idle_expires_at: t(1800),
@@ -441,6 +456,19 @@ mod tests {
             Uuid::from_u128(30),
             "lowest jti wins"
         );
+    }
+
+    #[test]
+    fn amr_is_the_union_of_both_copies_in_either_order() {
+        let prm = p(50);
+        let mut mfa = session(base_chain(2));
+        mfa.session.amr = vec!["mfa".into(), "otp".into(), "pwd".into()];
+        // A copy from a peer that predates `amr`.
+        let mut old = session(base_chain(2));
+        old.session.amr.clear();
+        let ab = merge(&mfa, &old, &prm);
+        assert_eq!(ab, merge(&old, &mfa, &prm));
+        assert_eq!(ab.session.amr, ["mfa", "otp", "pwd"]);
     }
 
     fn permute(idx: &mut Vec<usize>, k: usize, f: &mut impl FnMut(&[usize])) {

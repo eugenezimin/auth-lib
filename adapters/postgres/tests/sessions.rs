@@ -17,7 +17,7 @@ use z_auth::identity::user::{RegisterUser, UpdateUser};
 use z_auth::security::authentication::{ClientContext, Credentials};
 use z_auth::security::session::RevocationReason;
 use z_auth::security::session::{
-    IssueContext, RotateOutcome, SessionLifetimes, SessionRepository, SessionStatus,
+    IssueContext, NewSession, RotateOutcome, SessionLifetimes, SessionRepository, SessionStatus,
 };
 use z_auth::security::token::{NewRevocation, Revocation, RevocationRepository, RevocationScope};
 use z_auth_postgres::{PgRevocationRepository, PgSessionRepository};
@@ -147,6 +147,52 @@ async fn test_database_assigns_ids_and_timestamps() {
     .await
     .unwrap();
     assert!(same);
+
+    cleanup_user_by_id(&service, user_id).await.unwrap();
+}
+
+#[tokio::test]
+async fn test_amr_is_stored_with_the_session_and_kept_by_every_read() {
+    let service = make_service().await;
+    let repo = PgSessionRepository::new(pool().await);
+    let (user_id, pair) = login(&service).await;
+
+    // A password login.
+    let session = repo.find(pair.session_id).await.unwrap().unwrap();
+    assert_eq!(session.amr, ["pwd"]);
+    let claims = service.verifier().verify(&pair.access_token).unwrap();
+    assert_eq!(claims.amr, ["pwd"]);
+
+    // A session opened with a second factor.
+    let amr = vec!["mfa".to_string(), "otp".to_string(), "pwd".to_string()];
+    let (created, _) = repo
+        .create(
+            NewSession {
+                user_id,
+                secret: vec![1; 32],
+                created_ip: IP,
+                user_agent: None,
+                fingerprint_hash: None,
+                amr: amr.clone(),
+            },
+            &lifetimes(10),
+        )
+        .await
+        .unwrap();
+    assert_eq!(created.amr, amr);
+    assert_eq!(repo.find(created.id).await.unwrap().unwrap().amr, amr);
+    let snapshot = repo.load_for_refresh(created.id, 1).await.unwrap().unwrap();
+    assert_eq!(snapshot.session.amr, amr);
+    match repo
+        .rotate(created.id, 1, &issued(), &lifetimes(10))
+        .await
+        .unwrap()
+    {
+        RotateOutcome::Rotated { session, .. } => assert_eq!(session.amr, amr),
+        RotateOutcome::Conflict => panic!("rotation conflicted"),
+    }
+    let active = repo.list_active_for_user(user_id).await.unwrap();
+    assert!(active.iter().any(|s| s.id == created.id && s.amr == amr));
 
     cleanup_user_by_id(&service, user_id).await.unwrap();
 }
@@ -387,6 +433,8 @@ async fn test_every_revocation_reason_round_trips_through_the_enum() {
         RevocationReason::AccountDisabled,
         RevocationReason::AccountDeleted,
         RevocationReason::RevokedTokenUsed,
+        RevocationReason::ConcurrentRefresh,
+        RevocationReason::SecondFactorChanged,
     ];
     let ttl = Duration::from_secs(60);
 

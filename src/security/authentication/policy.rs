@@ -164,6 +164,7 @@ mod tests {
                 end_reason: None,
                 created_ip: IP_A,
                 user_agent: None,
+                amr: vec![],
                 current_generation: 3,
                 created_at: now,
                 idle_expires_at: now + chrono::Duration::minutes(30),
@@ -192,6 +193,7 @@ mod tests {
             iat: 0,
             exp: 0,
             authz: None,
+            amr: vec![],
         }
     }
 

@@ -287,6 +287,7 @@ async fn test_session_round_trip_cas_and_session_store_schema() {
     let (agg, rev) = store.load_session(sid).await.unwrap().unwrap();
     assert_eq!(agg.session.user_id, user.id);
     assert_eq!(agg.generations.len(), 1);
+    assert_eq!(agg.session.amr, ["pwd"]);
 
     // A local rotation moves the revision: a merge based on the old one
     // must not overwrite it.
@@ -341,7 +342,18 @@ async fn test_session_round_trip_cas_and_session_store_schema() {
             .any(|r| matches!(r, SyncRecord::Session(a) if a.session.id == sid))
     })
     .await;
-    let _ = remote_rev;
+    // A merge that changes `amr` writes it.
+    let mut upgraded = copy.clone();
+    upgraded.session.amr = vec!["mfa".into(), "otp".into(), "pwd".into()];
+    assert_eq!(
+        remote
+            .store_session(&upgraded, Some(remote_rev))
+            .await
+            .unwrap(),
+        ApplyOutcome::Applied
+    );
+    let (merged, _) = remote.load_session(sid).await.unwrap().unwrap();
+    assert_eq!(merged.session.amr, upgraded.session.amr);
 
     // The authority drops sessions of users it deleted (FK).
     let mut orphan: SessionAggregate = current.clone();

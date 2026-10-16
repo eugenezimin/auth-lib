@@ -44,6 +44,8 @@ pub enum RevocationReason {
     /// (two services rotated the same generation for the same client).
     /// Only that token is revoked; the session goes on.
     ConcurrentRefresh,
+    /// The user's second factors changed (one added, removed or reset).
+    SecondFactorChanged,
 }
 
 /// Lifecycle state of a session.
@@ -69,6 +71,10 @@ pub struct Session {
     pub end_reason: Option<RevocationReason>,
     pub created_ip: IpAddr,
     pub user_agent: Option<String>,
+    /// Authentication methods used to open the session (RFC 8176 `amr`
+    /// values, sorted, e.g. `["mfa", "otp", "pwd"]`).  Fixed for the
+    /// session's lifetime and carried by every access token it issues.
+    pub amr: Vec<String>,
     pub current_generation: u32,
     pub created_at: DateTime<Utc>,
     /// Pushed forward on every refresh.
@@ -152,6 +158,9 @@ pub struct NewSession {
     pub user_agent: Option<String>,
     /// SHA-256 of the client fingerprint, stored on generation 1.
     pub fingerprint_hash: Option<[u8; 32]>,
+    /// Authentication methods used to open the session (see
+    /// [`Session::amr`]).
+    pub amr: Vec<String>,
 }
 
 /// Who a rotation issues the next generation to.
@@ -241,6 +250,7 @@ impl std::fmt::Debug for Session {
             .field("end_reason", &self.end_reason)
             .field("created_ip", &self.created_ip)
             .field("user_agent", &self.user_agent)
+            .field("amr", &self.amr)
             .field("current_generation", &self.current_generation)
             .field("created_at", &self.created_at)
             .field("idle_expires_at", &self.idle_expires_at)
@@ -257,6 +267,7 @@ impl std::fmt::Debug for NewSession {
             .field("secret", &REDACTED)
             .field("created_ip", &self.created_ip)
             .field("user_agent", &self.user_agent)
+            .field("amr", &self.amr)
             .finish()
     }
 }

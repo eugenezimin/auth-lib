@@ -72,6 +72,7 @@ impl From<AuthError> for ApiError {
             InvalidPermissionValue(_) => {
                 Self::client(HTTP_UNPROCESSABLE_ENTITY, "invalid_permission_value", &err)
             }
+            SecondFactorRequired => Self::client(HTTP_FORBIDDEN, "second_factor_required", &err),
             ClusterMessageRejected(_) => {
                 Self::client(HTTP_UNAUTHORIZED, "cluster_message_rejected", &err)
             }

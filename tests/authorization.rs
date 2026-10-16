@@ -560,3 +560,20 @@ async fn grant_listing_follows_the_mode() {
         Err(AuthError::AuthzModeDisabled(_))
     ));
 }
+
+#[tokio::test]
+async fn password_sessions_carry_pwd_and_fail_require_mfa() {
+    let s = server(config("rbac"));
+    let (_, pair) = register_and_login(&s.auth, "amr@example.com", IP_A).await;
+    let c = claims(&s, &pair);
+    assert_eq!(c.amr, ["pwd"]);
+    assert!(s.auth.authorizer().has_amr(&c, "pwd"));
+    assert!(matches!(
+        s.auth.authorizer().require_mfa(&c),
+        Err(AuthError::SecondFactorRequired)
+    ));
+    // Refresh keeps the session's methods.
+    s.clock.advance(std::time::Duration::from_secs(301));
+    let next = refresh(&s, &pair).await;
+    assert_eq!(claims(&s, &next).amr, ["pwd"]);
+}

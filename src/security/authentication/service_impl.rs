@@ -16,7 +16,7 @@ use async_trait::async_trait;
 use uuid::Uuid;
 
 use crate::conf::config::AuthConfig;
-use crate::conf::constants::{REFRESH_ROTATE_ATTEMPTS, SESSION_SECRET_LEN};
+use crate::conf::constants::{AMR_PWD, REFRESH_ROTATE_ATTEMPTS, SESSION_SECRET_LEN};
 use crate::identity::credentials::PasswordHasher;
 use crate::identity::user::normalize_email;
 use crate::identity::user::repository::UserRepository;
@@ -127,6 +127,7 @@ impl AuthenticationServiceImpl {
             iat: generation.issued_at.timestamp(),
             exp: generation.access_expires_at.timestamp(),
             authz,
+            amr: session.amr.clone(),
         };
         Ok(TokenPair {
             session_id: session.id,
@@ -197,6 +198,7 @@ impl AuthenticationService for AuthenticationServiceImpl {
                     created_ip: issued.ip,
                     user_agent: issued.user_agent,
                     fingerprint_hash: issued.fingerprint_hash,
+                    amr: vec![AMR_PWD.to_string()],
                 },
                 &self.lifetimes,
             )

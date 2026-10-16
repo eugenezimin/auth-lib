@@ -72,6 +72,7 @@ impl SessionRepository for PgSessionRepository {
             .bind(&session.user_agent)
             .bind(lifetimes.idle_timeout)
             .bind(lifetimes.absolute_timeout)
+            .bind(&session.amr)
             .fetch_one(&mut *tx)
             .await
             .map_err(map_sqlx_error)?;

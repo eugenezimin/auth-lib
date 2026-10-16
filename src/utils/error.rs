@@ -90,6 +90,10 @@ pub enum AuthError {
     /// A permission value does not fit the permission's kind.
     InvalidPermissionValue(String),
 
+    /// The token's session was not opened with a second factor (its `amr`
+    /// lacks `mfa`), or login needs one that was not supplied.
+    SecondFactorRequired,
+
     // The variants below are raised by extensions (z-auth-cluster) and by
     // the refresh gate / serving fence they install; z-auth alone never
     // produces them.
@@ -168,6 +172,7 @@ impl std::fmt::Display for AuthError {
             Self::InvalidPermissionValue(reason) => {
                 write!(f, "invalid permission value: {reason}")
             }
+            Self::SecondFactorRequired => write!(f, "a second authentication factor is required"),
             Self::ClusterMessageRejected(reason) => {
                 write!(f, "cluster message rejected: {reason}")
             }

@@ -567,6 +567,7 @@ impl SessionRepository for InMemoryDb {
             end_reason: None,
             created_ip: new.created_ip,
             user_agent: new.user_agent.clone(),
+            amr: new.amr.clone(),
             current_generation: 1,
             created_at: now,
             idle_expires_at: now + lifetimes.idle_timeout,

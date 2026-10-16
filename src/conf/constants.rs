@@ -63,6 +63,17 @@ pub const REFRESH_TOKEN_VERSION: &str = "v1";
 /// How many times a refresh re-evaluates after losing a rotation race.
 pub const REFRESH_ROTATE_ATTEMPTS: u32 = 3;
 
+// ── Authentication methods (RFC 8176 `amr` values) ───────────────────────────
+
+/// Password.
+pub const AMR_PWD: &str = "pwd";
+/// One-time password: TOTP, an emailed code or a recovery code.
+pub const AMR_OTP: &str = "otp";
+/// A code sent by SMS.
+pub const AMR_SMS: &str = "sms";
+/// More than one factor was used.
+pub const AMR_MFA: &str = "mfa";
+
 // ── Password policy ───────────────────────────────────────────────────────────
 
 /// Minimum number of characters in a password.
