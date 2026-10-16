@@ -2,10 +2,14 @@
 
 [advisories]
 ignore = [
-    # rsa: Marvin timing side channel, no fixed release.  rsa is in Cargo.lock
-    # only through sqlx-mysql, an optional dependency of sqlx-macros-core that
-    # is never enabled: z-auth-postgres turns on sqlx's `postgres` feature
-    # only, and `cargo tree -i rsa --workspace --all-features --target all`
-    # is empty.  Drop this entry if MySQL support is ever added.
+    # rsa: Marvin timing side channel in private-key operations (decryption
+    # and signing), no fixed release.  rsa is reached in two ways.
+    # - z-auth-sso (feature `oidc`) through jsonwebtoken's `rust_crypto`
+    #   backend, which uses it only to verify RS/PS-signed ID tokens with an
+    #   identity provider's public key; no private RSA key exists, so the
+    #   timing leak has nothing to reveal.
+    # - sqlx-mysql, an optional dependency of sqlx-macros-core that is never
+    #   enabled: z-auth-postgres turns on sqlx's `postgres` feature only.
+    # Revisit if z-auth ever signs or decrypts with RSA.
     "RUSTSEC-2023-0071",
 ]
