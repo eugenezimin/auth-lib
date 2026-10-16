@@ -12,12 +12,17 @@ pub use crate::identity::access::{
     NewRole, Role, RoleRepository, RoleService, RoleUpdate, UserRole, UserRoleRepository,
 };
 pub use crate::identity::credentials::PasswordHasher;
+pub use crate::identity::external::{
+    ExternalIdentity, ExternalIdentityEvents, ExternalIdentityRepository, ExternalPrincipal,
+    LinkPolicy, NewExternalIdentity, ProviderPolicy, Provisioning,
+};
 pub use crate::identity::user::{
     NewUser, RegisterUser, UpdateUser, User, UserPage, UserQuery, UserRepository, UserService,
     UserUpdate, UserWithRoles,
 };
 pub use crate::security::authentication::{
-    AuthenticationService, ChallengeDelivery, ClientContext, Credentials, LoginChallenge,
+    AccountLinkService, AuthenticationService, ChallengeDelivery, ClientContext, Credentials,
+    ExternalLoginOutcome, FlowStateRepository, LinkChallenge, LinkConfirmation, LoginChallenge,
     LoginOutcome, SecondFactorDecision, SecondFactorGate, SecondFactorProof, TokenPair,
     VerifiedSecondFactor,
 };

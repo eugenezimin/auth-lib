@@ -134,6 +134,48 @@ pub struct ChallengeDelivery {
     pub expires_at: DateTime<Utc>,
 }
 
+/// What a sign-in through an external identity provider produced.
+#[must_use]
+#[derive(Clone, PartialEq, Eq)]
+pub enum ExternalLoginOutcome {
+    /// The session is open.
+    Tokens(TokenPair),
+    /// Complete the login with
+    /// [`complete_login`](crate::security::authentication::AuthenticationService::complete_login).
+    SecondFactor(LoginChallenge),
+    /// A user with the provider's email exists but the identity is not
+    /// linked to it: ask for that user's password and send it to
+    /// [`confirm_link`](crate::security::authentication::AuthenticationService::confirm_link).
+    LinkConfirmation(LinkChallenge),
+}
+
+impl From<LoginOutcome> for ExternalLoginOutcome {
+    fn from(outcome: LoginOutcome) -> Self {
+        match outcome {
+            LoginOutcome::Tokens(pair) => Self::Tokens(pair),
+            LoginOutcome::SecondFactor(challenge) => Self::SecondFactor(challenge),
+        }
+    }
+}
+
+/// A sign-in waiting for the password of the account it would be linked
+/// to.  Single use: a wrong password ends it.
+#[derive(Clone, PartialEq, Eq)]
+pub struct LinkChallenge {
+    /// Opaque token the client sends back with the password.
+    pub challenge_token: String,
+    pub expires_at: DateTime<Utc>,
+    /// The existing account's email, to show the user.
+    pub email: String,
+}
+
+/// The answer to a [`LinkChallenge`].
+#[derive(Clone)]
+pub struct LinkConfirmation {
+    pub challenge_token: String,
+    pub password: String,
+}
+
 /// The second step of a login.
 #[derive(Clone)]
 pub struct SecondFactorProof {
@@ -172,6 +214,35 @@ impl std::fmt::Debug for LoginChallenge {
             .field("expires_at", &self.expires_at)
             .field("methods", &self.methods)
             .field("delivery", &self.delivery)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for ExternalLoginOutcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Tokens(pair) => f.debug_tuple("Tokens").field(pair).finish(),
+            Self::SecondFactor(c) => f.debug_tuple("SecondFactor").field(c).finish(),
+            Self::LinkConfirmation(c) => f.debug_tuple("LinkConfirmation").field(c).finish(),
+        }
+    }
+}
+
+impl std::fmt::Debug for LinkChallenge {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LinkChallenge")
+            .field("challenge_token", &REDACTED)
+            .field("expires_at", &self.expires_at)
+            .field("email", &self.email)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for LinkConfirmation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LinkConfirmation")
+            .field("challenge_token", &REDACTED)
+            .field("password", &REDACTED)
             .finish()
     }
 }

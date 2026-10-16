@@ -20,6 +20,7 @@ pub struct AuthConfig {
     pub session: SessionConfig,
     pub password: PasswordPolicy,
     pub authz: AuthzConfig,
+    pub external: ExternalConfig,
 }
 
 /// Request attributes that must match for two refreshes of the same
@@ -129,6 +130,18 @@ pub struct PasswordPolicy {
     pub require_digit: bool,
 }
 
+/// External identities (sign-in through another identity provider) and
+/// account linking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExternalConfig {
+    /// Linking or unlinking an identity needs a session opened at most this
+    /// long ago; an older one must log in again first.
+    pub link_max_auth_age: Duration,
+    /// How long a sign-in that must be confirmed with the local password
+    /// stays open.
+    pub link_challenge_ttl: Duration,
+}
+
 #[derive(Debug)]
 pub enum ConfigError {
     /// A required field / environment variable was not set.
@@ -166,4 +179,7 @@ pub struct RawConfig {
 
     /// Comma set of `ip`, `user_agent`, `fingerprint`.
     pub refresh_retry_match: Option<String>,
+
+    pub external_link_max_auth_age_secs: Option<u64>,
+    pub external_link_challenge_ttl_secs: Option<u64>,
 }

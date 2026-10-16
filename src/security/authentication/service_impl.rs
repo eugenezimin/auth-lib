@@ -13,18 +13,29 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use uuid::Uuid;
 
 use crate::conf::config::AuthConfig;
-use crate::conf::constants::{AMR_MFA, AMR_PWD, REFRESH_ROTATE_ATTEMPTS, SESSION_SECRET_LEN};
+use crate::conf::constants::{
+    AMR_FED, AMR_MFA, AMR_PWD, LINK_CHALLENGE_SECRET_LEN, REFRESH_ROTATE_ATTEMPTS,
+    SESSION_SECRET_LEN,
+};
 use crate::identity::credentials::PasswordHasher;
-use crate::identity::user::model::UserWithRoles;
-use crate::identity::user::normalize_email;
+use crate::identity::external::{ExternalPrincipal, LinkPolicy, ProviderPolicy, Provisioning};
+use crate::identity::user::model::{NewUser, UserWithRoles};
 use crate::identity::user::repository::UserRepository;
+use crate::identity::user::{normalize_email, validate_email};
 use crate::security::authentication::account::RefreshAccountSource;
+use crate::security::authentication::flow::flow_key;
 use crate::security::authentication::gate::RefreshGate;
+use crate::security::authentication::linking::{
+    ExternalStores, Linker, PendingLink, clean_amr, missing_stores,
+};
 use crate::security::authentication::model::{
-    ClientContext, Credentials, LoginOutcome, SecondFactorProof, TokenPair,
+    ClientContext, Credentials, ExternalLoginOutcome, LinkChallenge, LinkConfirmation,
+    LoginOutcome, SecondFactorProof, TokenPair,
 };
 use crate::security::authentication::policy::{RefreshDecision, RefreshInput, evaluate_refresh};
 use crate::security::authentication::second_factor::{SecondFactorDecision, SecondFactorGate};
@@ -63,6 +74,18 @@ pub struct AuthenticationServiceImpl {
     gate: Option<Arc<dyn RefreshGate>>,
     /// Installed by an extension (e.g. z-auth-mfa).
     second_factor: Option<Arc<dyn SecondFactorGate>>,
+    /// External sign-in and linking, when the host supplied the stores.
+    external: Option<(ExternalStores, Linker)>,
+}
+
+/// Flow-state kinds (see [`flow_key`]).
+const FLOW_LINK: &str = "link";
+const FLOW_MFA: &str = "mfa";
+
+/// How a first sign-in through an unlinked identity resolves.
+enum Unlinked {
+    Account(UserWithRoles),
+    Confirm(LinkChallenge),
 }
 
 impl AuthenticationServiceImpl {
@@ -99,7 +122,140 @@ impl AuthenticationServiceImpl {
             config,
             gate: None,
             second_factor: None,
+            external: None,
         }
+    }
+
+    /// Enable external sign-in ([`AuthenticationService::login_external`])
+    /// and remember how logins waiting for a second factor started.
+    pub fn with_external(mut self, stores: ExternalStores) -> Self {
+        let linker = Linker::new(&stores);
+        self.external = Some((stores, linker));
+        self
+    }
+
+    fn external(&self) -> Result<&(ExternalStores, Linker), AuthError> {
+        self.external.as_ref().ok_or_else(missing_stores)
+    }
+
+    /// After the first factor (`amr`) of an external sign-in: ask the
+    /// second-factor gate, unless the provider reported `mfa`.  A challenge
+    /// remembers `amr` for [`complete_login`](AuthenticationService::complete_login).
+    async fn finish_first_factor(
+        &self,
+        account: &UserWithRoles,
+        amr: Vec<String>,
+        ctx: &ClientContext,
+    ) -> Result<LoginOutcome, AuthError> {
+        if !amr.iter().any(|m| m == AMR_MFA)
+            && let Some(gate) = &self.second_factor
+            && let SecondFactorDecision::Challenge(challenge) =
+                gate.on_password_verified(account, ctx).await?
+        {
+            let (stores, _) = self.external()?;
+            // Outlives the challenge a little; the key is unguessable.
+            let ttl = (challenge.expires_at - self.clock.now())
+                .to_std()
+                .unwrap_or_default()
+                + Duration::from_secs(60);
+            stores
+                .flows
+                .put(
+                    &flow_key(FLOW_MFA, &challenge.challenge_token),
+                    &amr.join(","),
+                    ttl,
+                )
+                .await?;
+            return Ok(LoginOutcome::SecondFactor(challenge));
+        }
+        let pair = self.open_session(account, amr, ctx).await?;
+        Ok(LoginOutcome::Tokens(pair))
+    }
+
+    /// A first sign-in through an identity no user has: link it to the user
+    /// with the provider's email, or create one, as `policy` allows.
+    async fn resolve_unlinked(
+        &self,
+        principal: &ExternalPrincipal,
+        policy: &ProviderPolicy,
+    ) -> Result<Unlinked, AuthError> {
+        let (stores, linker) = self.external()?;
+        let email = principal
+            .email
+            .as_deref()
+            .map(normalize_email)
+            .filter(|e| !e.is_empty());
+        let existing = match &email {
+            Some(email) => self.users.find_with_roles_by_email(email).await?,
+            None => None,
+        };
+
+        let Some(account) = existing else {
+            if policy.provisioning == Provisioning::Deny {
+                return Err(AuthError::ExternalIdentityNotLinked);
+            }
+            let email = email.ok_or_else(|| {
+                AuthError::InvalidEmail("the identity provider shared no email address".into())
+            })?;
+            validate_email(&email)?;
+            let username = match &principal.username {
+                Some(u) if !self.users.exists_by_username(u).await? => Some(u.clone()),
+                _ => None,
+            };
+            let user = self
+                .users
+                .create(NewUser {
+                    email,
+                    password_hash: None,
+                    username,
+                    first_name: principal.first_name.clone(),
+                    last_name: principal.last_name.clone(),
+                    is_verified: policy.trust_email && principal.email_verified,
+                })
+                .await?;
+            linker.link(user.id, principal, policy.max_links).await?;
+            return Ok(Unlinked::Account(UserWithRoles {
+                user,
+                roles: Vec::new(),
+            }));
+        };
+
+        if policy.link == LinkPolicy::Never {
+            return Err(AuthError::ExternalIdentityNotLinked);
+        }
+        if !account.user.is_active {
+            return Err(AuthError::AccountDisabled);
+        }
+        let vouched = policy.link == LinkPolicy::VerifiedEmail
+            && policy.trust_email
+            && principal.email_verified
+            && account.user.is_verified;
+        if vouched {
+            linker
+                .link(account.user.id, principal, policy.max_links)
+                .await?;
+            return Ok(Unlinked::Account(account));
+        }
+        // Only the account's password can confirm the link.
+        if account.user.password_hash.is_none() {
+            return Err(AuthError::ExternalIdentityNotLinked);
+        }
+        let token = URL_SAFE_NO_PAD.encode(random_bytes(LINK_CHALLENGE_SECRET_LEN)?);
+        let ttl = self.config.external.link_challenge_ttl;
+        let pending = PendingLink {
+            user_id: account.user.id,
+            max_links: policy.max_links,
+            principal: principal.clone(),
+        };
+        stores
+            .flows
+            .put(&flow_key(FLOW_LINK, &token), &pending.encode(), ttl)
+            .await?;
+        Ok(Unlinked::Confirm(LinkChallenge {
+            challenge_token: token,
+            expires_at: self.clock.now() + ttl,
+            email: account.user.email,
+        }))
     }
 
     /// Consult `gate` on every refresh: it may refuse a stale instance and
@@ -246,6 +402,80 @@ impl AuthenticationService for AuthenticationServiceImpl {
         Ok(LoginOutcome::Tokens(pair))
     }
 
+    async fn login_external(
+        &self,
+        mut principal: ExternalPrincipal,
+        policy: ProviderPolicy,
+        ctx: ClientContext,
+    ) -> Result<ExternalLoginOutcome, AuthError> {
+        principal.validate()?;
+        principal.amr = clean_amr(&principal.amr).collect();
+        let (stores, _) = self.external()?;
+        let account = match stores
+            .identities
+            .find_by_subject(&principal.issuer, &principal.subject)
+            .await?
+        {
+            Some(identity) => {
+                let account = self
+                    .users
+                    .find_with_roles_by_id(identity.user_id)
+                    .await?
+                    .ok_or(AuthError::ExternalIdentityNotLinked)?;
+                if !account.user.is_active {
+                    return Err(AuthError::AccountDisabled);
+                }
+                stores.identities.record_login(identity.id).await?;
+                account
+            }
+            None => match self.resolve_unlinked(&principal, &policy).await? {
+                Unlinked::Account(account) => account,
+                Unlinked::Confirm(challenge) => {
+                    return Ok(ExternalLoginOutcome::LinkConfirmation(challenge));
+                }
+            },
+        };
+        let mut amr = vec![AMR_FED.to_string()];
+        amr.extend(principal.amr);
+        Ok(self.finish_first_factor(&account, amr, &ctx).await?.into())
+    }
+
+    async fn confirm_link(
+        &self,
+        confirmation: LinkConfirmation,
+        ctx: ClientContext,
+    ) -> Result<LoginOutcome, AuthError> {
+        let (stores, linker) = self.external()?;
+        let pending = stores
+            .flows
+            .take(&flow_key(FLOW_LINK, &confirmation.challenge_token))
+            .await?
+            .ok_or(AuthError::ChallengeExpired)?;
+        let pending = PendingLink::decode(&pending)?;
+        let account = self
+            .users
+            .find_with_roles_by_id(pending.user_id)
+            .await?
+            .ok_or(AuthError::InvalidCredentials)?;
+        let hash = account
+            .user
+            .password_hash
+            .as_deref()
+            .ok_or(AuthError::InvalidCredentials)?;
+        if !self.hasher.verify(&confirmation.password, hash)? {
+            return Err(AuthError::InvalidCredentials);
+        }
+        if !account.user.is_active {
+            return Err(AuthError::AccountDisabled);
+        }
+        linker
+            .link(account.user.id, &pending.principal, pending.max_links)
+            .await?;
+        let mut amr = vec![AMR_FED.to_string(), AMR_PWD.to_string()];
+        amr.extend(pending.principal.amr);
+        self.finish_first_factor(&account, amr, &ctx).await
+    }
+
     async fn complete_login(
         &self,
         proof: SecondFactorProof,
@@ -265,8 +495,23 @@ impl AuthenticationService for AuthenticationServiceImpl {
         if !account.user.is_active {
             return Err(AuthError::AccountDisabled);
         }
+        // How the login started: a password, unless an external sign-in
+        // left its methods behind.
+        let first = match &self.external {
+            Some((stores, _)) => {
+                stores
+                    .flows
+                    .take(&flow_key(FLOW_MFA, &proof.challenge_token))
+                    .await?
+            }
+            None => None,
+        };
         let mut amr = verified.amr;
-        amr.extend([AMR_PWD.to_string(), AMR_MFA.to_string()]);
+        match first {
+            Some(first) => amr.extend(first.split(',').map(String::from)),
+            None => amr.push(AMR_PWD.to_string()),
+        }
+        amr.push(AMR_MFA.to_string());
         self.open_session(&account, amr, &ctx).await
     }
 

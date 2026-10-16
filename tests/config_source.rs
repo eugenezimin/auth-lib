@@ -262,6 +262,18 @@ fn the_example_file_loads_with_the_defaults() {
     assert_eq!(format!("{from_file:?}"), format!("{defaults:?}"));
 }
 
+#[test]
+fn external_identity_settings_load_with_defaults() {
+    let config = load("auth:\n  external:\n    link_max_auth_age_secs: 120\n").unwrap();
+    assert_eq!(config.external.link_max_auth_age, Duration::from_secs(120));
+    assert_eq!(
+        config.external.link_challenge_ttl,
+        Duration::from_secs(DEFAULT_EXTERNAL_LINK_CHALLENGE_TTL_SECS)
+    );
+    let key = parse_error_key(load("auth:\n  external:\n    link_max_age: 1\n"));
+    assert!(key.starts_with("auth.external.link_max_age"), "{key}");
+}
+
 const PROVIDERS: &str = r#"
 sso:
   callback_url: https://app.example.com/callback

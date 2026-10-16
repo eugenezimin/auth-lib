@@ -22,13 +22,15 @@ use crate::sync::{AccountSnapshot, CatalogSnapshot};
 use z_auth::identity::access::model::{NewRole, Role, RoleUpdate, UserRole};
 use z_auth::identity::access::repository::UserRoleRepository;
 use z_auth::identity::access::service::RoleService;
+use z_auth::identity::external::{ExternalPrincipal, ProviderPolicy};
 use z_auth::identity::user::model::{
     RegisterUser, UpdateUser, User, UserPage, UserQuery, UserWithRoles,
 };
 use z_auth::identity::user::service::UserService;
 use z_auth::security::authentication::account::RefreshAccountSource;
 use z_auth::security::authentication::model::{
-    ClientContext, Credentials, LoginOutcome, SecondFactorProof, TokenPair,
+    ClientContext, Credentials, ExternalLoginOutcome, LinkConfirmation, LoginOutcome,
+    SecondFactorProof, TokenPair,
 };
 use z_auth::security::authentication::service::AuthenticationService;
 use z_auth::security::authorization::model::{
@@ -374,6 +376,29 @@ impl AuthenticationService for ProducingLogin {
     ) -> Result<LoginOutcome, AuthError> {
         let outcome = self.inner.login(credentials, ctx).await?;
         // A challenge opened no session yet: publish on completion.
+        if let LoginOutcome::Tokens(pair) = &outcome {
+            self.publish(pair).await?;
+        }
+        Ok(outcome)
+    }
+    async fn login_external(
+        &self,
+        principal: ExternalPrincipal,
+        policy: ProviderPolicy,
+        ctx: ClientContext,
+    ) -> Result<ExternalLoginOutcome, AuthError> {
+        let outcome = self.inner.login_external(principal, policy, ctx).await?;
+        if let ExternalLoginOutcome::Tokens(pair) = &outcome {
+            self.publish(pair).await?;
+        }
+        Ok(outcome)
+    }
+    async fn confirm_link(
+        &self,
+        confirmation: LinkConfirmation,
+        ctx: ClientContext,
+    ) -> Result<LoginOutcome, AuthError> {
+        let outcome = self.inner.confirm_link(confirmation, ctx).await?;
         if let LoginOutcome::Tokens(pair) = &outcome {
             self.publish(pair).await?;
         }

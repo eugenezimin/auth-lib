@@ -40,14 +40,18 @@ pub struct UserWithRoles {
 /// [`UserRepository::create`](crate::identity::user::UserRepository::create).
 ///
 /// `password_hash` already holds the hasher output — the repository just
-/// writes it verbatim.
+/// writes it verbatim.  `None` creates a user who cannot log in with a
+/// password (e.g. one provisioned by an external identity provider).
 #[derive(Clone)]
 pub struct NewUser {
     pub email: String,
-    pub password_hash: String,
+    pub password_hash: Option<String>,
     pub username: Option<String>,
     pub first_name: Option<String>,
     pub last_name: Option<String>,
+    /// Whether the email address is already verified (e.g. vouched for by
+    /// a trusted identity provider).  Registration creates unverified users.
+    pub is_verified: bool,
 }
 
 /// Partial update consumed by
@@ -146,10 +150,14 @@ impl std::fmt::Debug for NewUser {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("NewUser")
             .field("email", &self.email)
-            .field("password_hash", &REDACTED)
+            .field(
+                "password_hash",
+                &self.password_hash.as_ref().map(|_| REDACTED),
+            )
             .field("username", &self.username)
             .field("first_name", &self.first_name)
             .field("last_name", &self.last_name)
+            .field("is_verified", &self.is_verified)
             .finish()
     }
 }

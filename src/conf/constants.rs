@@ -75,6 +75,20 @@ pub const AMR_OTP: &str = "otp";
 pub const AMR_SMS: &str = "sms";
 /// More than one factor was used.
 pub const AMR_MFA: &str = "mfa";
+/// Signed in through an external identity provider (not an RFC 8176
+/// value).
+pub const AMR_FED: &str = "fed";
+
+// ── External identities ──────────────────────────────────────────────────────
+
+/// Linking an identity needs a login at most 10 minutes old.
+pub const DEFAULT_EXTERNAL_LINK_MAX_AUTH_AGE_SECS: u64 = 600;
+
+/// A sign-in waiting for the local password stays open 5 minutes.
+pub const DEFAULT_EXTERNAL_LINK_CHALLENGE_TTL_SECS: u64 = 300;
+
+/// Length of the random secret in a link-confirmation token.
+pub const LINK_CHALLENGE_SECRET_LEN: usize = 32;
 
 // ── Password policy ───────────────────────────────────────────────────────────
 
@@ -120,6 +134,8 @@ pub const ENV_PASSWORD_REQUIRE_UPPERCASE: &str = "AUTH_PASSWORD_REQUIRE_UPPERCAS
 pub const ENV_PASSWORD_REQUIRE_DIGIT: &str = "AUTH_PASSWORD_REQUIRE_DIGIT";
 pub const ENV_AUTHZ_MODE: &str = "AUTH_AUTHZ_MODE";
 pub const ENV_REFRESH_RETRY_MATCH: &str = "AUTH_REFRESH_RETRY_MATCH";
+pub const ENV_EXTERNAL_LINK_MAX_AUTH_AGE_SECS: &str = "AUTH_EXTERNAL_LINK_MAX_AUTH_AGE_SECS";
+pub const ENV_EXTERNAL_LINK_CHALLENGE_TTL_SECS: &str = "AUTH_EXTERNAL_LINK_CHALLENGE_TTL_SECS";
 
 /// Path of the YAML configuration file read by `ConfigSource::standard`.
 pub const ENV_CONFIG_FILE: &str = "AUTH_CONFIG_FILE";
@@ -160,6 +176,14 @@ pub const KEYS: &[Key] = &[
     ),
     Key::new(ENV_PASSWORD_REQUIRE_DIGIT, "auth.password.require_digit"),
     Key::new(ENV_AUTHZ_MODE, "auth.authz.mode"),
+    Key::new(
+        ENV_EXTERNAL_LINK_MAX_AUTH_AGE_SECS,
+        "auth.external.link_max_auth_age_secs",
+    ),
+    Key::new(
+        ENV_EXTERNAL_LINK_CHALLENGE_TTL_SECS,
+        "auth.external.link_challenge_ttl_secs",
+    ),
 ];
 
 // ── Config field names (used in configuration errors) ────────────────────────

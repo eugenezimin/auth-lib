@@ -8,8 +8,10 @@ use std::time::Duration;
 use async_trait::async_trait;
 use uuid::Uuid;
 
+use z_auth::identity::external::{ExternalPrincipal, ProviderPolicy};
 use z_auth::security::authentication::{
-    AuthenticationService, ClientContext, Credentials, LoginOutcome, SecondFactorProof, TokenPair,
+    AuthenticationService, ClientContext, Credentials, ExternalLoginOutcome, LinkConfirmation,
+    LoginOutcome, SecondFactorProof, TokenPair,
 };
 use z_auth::security::session::RevocationReason;
 use z_auth::security::token::TokenRevocationService;
@@ -35,6 +37,25 @@ impl AuthenticationService for FencedAuthentication {
     ) -> Result<LoginOutcome, AuthError> {
         check(&self.fenced)?;
         self.inner.login(credentials, ctx).await
+    }
+
+    async fn login_external(
+        &self,
+        principal: ExternalPrincipal,
+        policy: ProviderPolicy,
+        ctx: ClientContext,
+    ) -> Result<ExternalLoginOutcome, AuthError> {
+        check(&self.fenced)?;
+        self.inner.login_external(principal, policy, ctx).await
+    }
+
+    async fn confirm_link(
+        &self,
+        confirmation: LinkConfirmation,
+        ctx: ClientContext,
+    ) -> Result<LoginOutcome, AuthError> {
+        check(&self.fenced)?;
+        self.inner.confirm_link(confirmation, ctx).await
     }
 
     async fn complete_login(

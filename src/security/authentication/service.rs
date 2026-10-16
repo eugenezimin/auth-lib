@@ -5,8 +5,10 @@ use std::time::Duration;
 use async_trait::async_trait;
 use uuid::Uuid;
 
+use crate::identity::external::{ExternalPrincipal, ProviderPolicy};
 use crate::security::authentication::model::{
-    ClientContext, Credentials, LoginOutcome, SecondFactorProof, TokenPair,
+    ClientContext, Credentials, ExternalLoginOutcome, LinkConfirmation, LoginOutcome,
+    SecondFactorProof, TokenPair,
 };
 use crate::security::token::model::Claims;
 use crate::utils::error::AuthError;
@@ -25,6 +27,37 @@ pub trait AuthenticationService: Send + Sync {
     async fn login(
         &self,
         credentials: Credentials,
+        ctx: ClientContext,
+    ) -> Result<LoginOutcome, AuthError>;
+
+    /// Sign in with an identity an external provider asserted, verified by
+    /// a protocol adapter (e.g. z-auth-sso).  Needs
+    /// [`ZAuthBuilder::external_identities`](crate::ZAuthBuilder::external_identities).
+    ///
+    /// The identity's linked user signs in.  An identity not linked yet is
+    /// linked to the user with the provider's email, or a user is created,
+    /// as `policy` allows — linking may first need that user's password
+    /// ([`ExternalLoginOutcome::LinkConfirmation`]).  The second-factor
+    /// gate applies as after a password, unless the provider reported
+    /// `mfa`.  Tokens carry `amr` with `fed`.
+    ///
+    /// # Errors
+    /// [`AuthError::ExternalIdentityNotLinked`] when `policy` neither links
+    /// nor creates a user; [`AuthError::AccountDisabled`].
+    async fn login_external(
+        &self,
+        principal: ExternalPrincipal,
+        policy: ProviderPolicy,
+        ctx: ClientContext,
+    ) -> Result<ExternalLoginOutcome, AuthError>;
+
+    /// Answer a [`ExternalLoginOutcome::LinkConfirmation`] with the
+    /// existing account's password: link the identity, then continue the
+    /// login (tokens carry `amr` with `fed` and `pwd`).  The challenge is
+    /// single use — a wrong password ends it.
+    async fn confirm_link(
+        &self,
+        confirmation: LinkConfirmation,
         ctx: ClientContext,
     ) -> Result<LoginOutcome, AuthError>;
 
