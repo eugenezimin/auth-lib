@@ -281,4 +281,17 @@ cluster:
             Err(ConfigError::Parse { ref key, .. }) if key == "cluster.heartbeat_ms in YAML"
         ));
     }
+
+    #[test]
+    fn the_example_file_loads_with_the_defaults() {
+        use z_auth_cluster::config::{ClusterDirectLoader, RawClusterConfig};
+
+        let example = concat!(env!("CARGO_MANIFEST_DIR"), "/../../z-auth.example.yaml");
+        let source = ConfigSource::yaml_file(example).unwrap();
+        let from_file = ClusterSourceLoader::new(source).load_settings().unwrap();
+        let defaults = ClusterDirectLoader::new(RawClusterConfig::default())
+            .load_settings()
+            .unwrap();
+        assert_eq!(format!("{from_file:?}"), format!("{defaults:?}"));
+    }
 }

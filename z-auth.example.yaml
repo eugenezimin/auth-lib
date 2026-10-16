@@ -1,0 +1,153 @@
+# z-auth configuration file — every setting that env.example lists, as YAML.
+#
+# Point AUTH_CONFIG_FILE at a copy and load it with ConfigSource::standard()
+# (or ConfigSource::yaml_file(path)?.with_env()).  Each crate reads only its
+# own section, and an environment variable always overrides the file, so
+# secrets can stay in the environment or a secret store.  A setting that is
+# left empty (~) or removed falls back to its default; keys a crate does not
+# know are rejected.  Sections for crates you don't use are simply ignored,
+# and the host may add sections of its own.
+#
+# Generate the keys with:  cargo run --example keygen
+#                          cargo run -p z-auth-mfa --example mfa_keygen
+
+# ── z-auth (core) — SourceLoader ─────────────────────────────────────────────
+auth:
+  jwt:
+    signing_key: ~             # AUTH_JWT_SIGNING_KEY – auth service only, base64 Ed25519 seed
+    verifying_keys: []         # AUTH_JWT_VERIFYING_KEYS – every verifying service; several during rotation
+    issuer: z-auth             # AUTH_JWT_ISSUER
+    access_ttl_secs: 300       # AUTH_JWT_ACCESS_TTL_SECS – 5 minutes
+    leeway_secs: 30            # AUTH_JWT_LEEWAY_SECS – clock-skew tolerance
+  session:
+    refresh_secret: ~          # AUTH_REFRESH_SECRET – auth service only, base64, ≥ 32 bytes
+    idle_timeout_secs: 1800    # AUTH_SESSION_IDLE_TIMEOUT_SECS – 30 minutes
+    absolute_timeout_secs: 28800   # AUTH_SESSION_ABSOLUTE_TIMEOUT_SECS – 8 hours
+    history_size: 10           # AUTH_SESSION_HISTORY_SIZE – generations kept for reuse detection
+    refresh_grace_secs: 30     # AUTH_REFRESH_GRACE_SECS – concurrent-refresh window
+    ip_binding: false          # AUTH_IP_BINDING – true: IP change = theft
+    retry_match: [ip]          # AUTH_REFRESH_RETRY_MATCH – any of ip, user_agent, fingerprint
+    max_sessions_per_user: 5   # AUTH_MAX_SESSIONS_PER_USER – 0 = unlimited
+  password:
+    min_length: 8              # AUTH_PASSWORD_MIN_LENGTH
+    require_uppercase: true    # AUTH_PASSWORD_REQUIRE_UPPERCASE
+    require_digit: true        # AUTH_PASSWORD_REQUIRE_DIGIT
+  authz:
+    mode: rbac                 # AUTH_AUTHZ_MODE – none | rbac | permissions | combined
+
+# ── z-auth-cluster (optional) — ClusterSourceLoader ──────────────────────────
+cluster:
+  deployment_mode: ~           # AUTH_DEPLOYMENT_MODE – standalone | shared | federation (Cluster::new: shared)
+  service: z-auth              # AUTH_CLUSTER_SERVICE – this service = this cluster
+  secret: ~                    # AUTH_CLUSTER_SECRET – base64, ≥ 32 bytes, same everywhere
+  advertise:
+    ip: ~                      # AUTH_CLUSTER_ADVERTISE_IP
+    dns: ~                     # AUTH_CLUSTER_ADVERTISE_DNS – preferred over the IP
+    port: ~                    # AUTH_CLUSTER_ADVERTISE_PORT, e.g. 7000
+  heartbeat_ms: 2000           # AUTH_CLUSTER_HEARTBEAT_MS – also how often to call ZAuth::tick
+  warning_after: 1             # AUTH_CLUSTER_WARNING_AFTER – missed beats → warning
+  missing_after: 1             # AUTH_CLUSTER_MISSING_AFTER – further missed beats → evicted
+  retired_ttl_secs: 1800       # AUTH_CLUSTER_RETIRED_TTL_SECS
+  max_skew_secs: 30            # AUTH_CLUSTER_MAX_SKEW_SECS – max sent_at vs. local clock difference
+  self_fence: ~                # AUTH_CLUSTER_SELF_FENCE – quorum | off (default: quorum in federation, off in shared)
+  seeds: []                    # AUTH_CLUSTER_SEEDS – host:port of any instance(s); federation, except on the authority
+  link:                        # federation mode only
+    retry_attempts: 3          # AUTH_LINK_RETRY_ATTEMPTS
+    retry_backoff_ms: 200      # AUTH_LINK_RETRY_BACKOFF_MS
+    breaker_failures: 3        # AUTH_LINK_BREAKER_FAILURES
+    breaker_cooldown_secs: 30  # AUTH_LINK_BREAKER_COOLDOWN_SECS
+    dead_reprobe_secs: 60      # AUTH_LINK_DEAD_REPROBE_SECS
+  federation:                  # federation mode only
+    authority_service: ~       # AUTH_AUTHORITY_SERVICE – required, the service that owns identity
+    session_distribution: all  # AUTH_SESSION_DISTRIBUTION – all | on_demand
+    max_staleness_secs: 0      # AUTH_FEDERATION_MAX_STALENESS_SECS – 0 = fail-open
+    pull_page_size: 500        # AUTH_FEDERATION_PULL_PAGE_SIZE
+    purge_horizon_secs: 604800 # AUTH_FEDERATION_PURGE_HORIZON_SECS
+    fork:
+      window_ms: 5000          # AUTH_FORK_WINDOW_MS
+      max_benign: 1            # AUTH_FORK_MAX_BENIGN
+      budget_window_secs: 3600 # AUTH_FORK_BUDGET_WINDOW_SECS
+
+# ── z-auth-mfa (optional) — MfaSourceLoader ──────────────────────────────────
+mfa:
+  enforcement: optional        # AUTH_MFA_ENFORCEMENT – off | optional | required | roles
+  required_roles: []           # AUTH_MFA_REQUIRED_ROLES – with enforcement: roles
+  unenrolled: allow            # AUTH_MFA_UNENROLLED – allow (password-only tokens) | deny
+  methods: [totp]              # AUTH_MFA_METHODS – any of totp, email, sms, preferred first
+  encryption_key: ~            # AUTH_MFA_ENCRYPTION_KEY – base64, 32 bytes; seals TOTP secrets and destinations
+  previous_encryption_keys: [] # AUTH_MFA_PREVIOUS_ENCRYPTION_KEYS – still accepted for opening
+  hash_key: ~                  # AUTH_MFA_HASH_KEY – base64, ≥ 32 bytes; HMAC of codes and challenges
+  enrollment_ttl_secs: 600     # AUTH_MFA_ENROLLMENT_TTL_SECS
+  end_sessions_on_removal: true    # AUTH_MFA_END_SESSIONS_ON_REMOVAL
+  totp:
+    issuer: ~                  # AUTH_MFA_TOTP_ISSUER – default: auth.jwt.issuer
+    algorithm: sha1            # AUTH_MFA_TOTP_ALGORITHM – sha1 | sha256 | sha512
+    digits: 6                  # AUTH_MFA_TOTP_DIGITS – 6–8
+    period_secs: 30            # AUTH_MFA_TOTP_PERIOD_SECS
+    skew_steps: 1              # AUTH_MFA_TOTP_SKEW_STEPS – 0–5
+    secret_bytes: 20           # AUTH_MFA_TOTP_SECRET_BYTES – 16–64
+  recovery:
+    code_count: 10             # AUTH_MFA_RECOVERY_CODE_COUNT – 0 = no recovery codes
+    code_length: 10            # AUTH_MFA_RECOVERY_CODE_LENGTH – 8–32
+  challenge:
+    ttl_secs: 300              # AUTH_MFA_CHALLENGE_TTL_SECS
+    max_attempts: 5            # AUTH_MFA_CHALLENGE_MAX_ATTEMPTS
+    match: none                # AUTH_MFA_CHALLENGE_MATCH – none | any of ip, user_agent, fingerprint
+  lockout:
+    threshold: 10              # AUTH_MFA_LOCKOUT_THRESHOLD – failures per window; 0 = never lock
+    window_secs: 900           # AUTH_MFA_LOCKOUT_WINDOW_SECS
+    duration_secs: 900         # AUTH_MFA_LOCKOUT_SECS
+  code:                        # email / SMS codes
+    digits: 6                  # AUTH_MFA_CODE_DIGITS – 6–10
+    ttl_secs: 300              # AUTH_MFA_CODE_TTL_SECS
+    resend_secs: 30            # AUTH_MFA_CODE_RESEND_SECS
+    max_sends: 5               # AUTH_MFA_CODE_MAX_SENDS
+    auto_send: true            # AUTH_MFA_AUTO_SEND – send at login when the user has no TOTP
+  purge:
+    interval_secs: 300         # AUTH_MFA_PURGE_INTERVAL_SECS
+    retention_secs: 86400      # AUTH_MFA_PURGE_RETENTION_SECS
+
+  # ── z-auth-mfa-sender (optional) — DeliveryConfig::from_source ────────────
+  # Who delivers email / SMS codes; `log` only writes them to the log.
+  delivery:
+    sender_name: ~             # AUTH_MFA_SENDER_NAME – default: mfa.totp.issuer, then auth.jwt.issuer
+    timeout_secs: 10           # AUTH_MFA_DELIVERY_TIMEOUT_SECS
+    email:
+      provider: log            # AUTH_MFA_EMAIL_PROVIDER – log | smtp | sendgrid | postmark | mailgun
+      from: ~                  # AUTH_MFA_EMAIL_FROM – every email provider but log
+      smtp:
+        host: ~                # AUTH_MFA_SMTP_HOST
+        security: starttls     # AUTH_MFA_SMTP_SECURITY – starttls | tls | none (local dev only)
+        port: ~                # AUTH_MFA_SMTP_PORT – default by security: 587 / 465 / 25
+        username: ~            # AUTH_MFA_SMTP_USERNAME – with password, or neither
+        password: ~            # AUTH_MFA_SMTP_PASSWORD
+      sendgrid:
+        api_key: ~             # AUTH_MFA_SENDGRID_API_KEY
+      postmark:
+        server_token: ~        # AUTH_MFA_POSTMARK_SERVER_TOKEN
+        message_stream: outbound   # AUTH_MFA_POSTMARK_MESSAGE_STREAM
+      mailgun:
+        api_key: ~             # AUTH_MFA_MAILGUN_API_KEY
+        domain: ~              # AUTH_MFA_MAILGUN_DOMAIN
+        region: us             # AUTH_MFA_MAILGUN_REGION – us | eu
+    sms:
+      provider: log            # AUTH_MFA_SMS_PROVIDER – log | twilio | webhook
+      twilio:
+        account_sid: ~         # AUTH_MFA_TWILIO_ACCOUNT_SID
+        auth_token: ~          # AUTH_MFA_TWILIO_AUTH_TOKEN
+        from: ~                # AUTH_MFA_TWILIO_FROM – or messaging_service_sid, exactly one
+        messaging_service_sid: ~   # AUTH_MFA_TWILIO_MESSAGING_SERVICE_SID
+      webhook:
+        url: ~                 # AUTH_MFA_SMS_WEBHOOK_URL
+        secret: ~              # AUTH_MFA_SMS_WEBHOOK_SECRET – HMAC-SHA256 signature (X-ZAuth-Signature)
+        bearer_token: ~        # AUTH_MFA_SMS_WEBHOOK_BEARER_TOKEN
+
+# ── z-auth-postgres (reference adapter) — PgConfig::from_source ──────────────
+database:
+  host: localhost              # DB_HOST
+  port: 5432                   # DB_PORT
+  user: postgres               # DB_USER
+  password: ~                  # DB_PASSWORD – required; better kept in the environment
+  name: auth                   # DB_NAME
+  max_pool_size: 10            # DB_MAX_POOL_SIZE
+  connect_timeout_secs: 5      # DB_CONNECT_TIMEOUT_SECS

@@ -192,15 +192,19 @@ impl ConfigSource {
                 path.strip_prefix(prefix)
                     .is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
             };
-            for path in doc.leaves.keys().chain(&doc.containers) {
+            for path in doc.leaves.keys().chain(&doc.unset).chain(&doc.containers) {
                 if !under(path, name) || skip.iter().any(|s| under(path, s)) {
                     continue;
                 }
-                if path == name && !doc.containers.contains(path) {
-                    return Err(ConfigError::Parse {
-                        key: doc.origin(path),
-                        reason: "expected a mapping of settings".into(),
-                    });
+                if path == name {
+                    // A mapping, or `~` for an empty section.
+                    if doc.leaves.contains_key(path) {
+                        return Err(ConfigError::Parse {
+                            key: doc.origin(path),
+                            reason: "expected a mapping of settings".into(),
+                        });
+                    }
+                    continue;
                 }
                 let known = keys.iter().any(|k| k.path == path)
                     || (doc.containers.contains(path) && keys.iter().any(|k| under(k.path, path)));
@@ -266,8 +270,11 @@ impl Section<'_> {
 /// A parsed file, flattened to dotted paths.
 struct Document {
     name: String,
-    /// Leaf path → value (lists comma-joined).  `null` leaves are absent.
+    /// Leaf path → value (lists comma-joined).
     leaves: BTreeMap<String, String>,
+    /// Leaves that are present but unset (`~` or an empty list), so that
+    /// [`ConfigSource::section`] still checks their names.
+    unset: std::collections::BTreeSet<String>,
     /// Paths of the mappings, so an empty or mistyped mapping is still
     /// checked by [`ConfigSource::section`].
     containers: std::collections::BTreeSet<String>,
@@ -279,6 +286,7 @@ impl Document {
         let mut doc = Self {
             name,
             leaves: BTreeMap::new(),
+            unset: Default::default(),
             containers: Default::default(),
         };
         match root {
@@ -302,7 +310,9 @@ impl Document {
                 format!("{prefix}.{key}")
             };
             match node {
-                Node::Null => {}
+                Node::Null => {
+                    self.unset.insert(path);
+                }
                 Node::Scalar(v) => {
                     self.leaves.insert(path, v);
                 }
@@ -320,7 +330,11 @@ impl Document {
                             }
                         }
                     }
-                    self.leaves.insert(path, values.join(","));
+                    if values.is_empty() {
+                        self.unset.insert(path);
+                    } else {
+                        self.leaves.insert(path, values.join(","));
+                    }
                 }
                 Node::Map(inner) => {
                     self.containers.insert(path.clone());

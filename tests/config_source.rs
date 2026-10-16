@@ -131,12 +131,19 @@ fn lists_accept_a_sequence_or_a_comma_string() {
     .unwrap();
     assert_eq!(cfg.jwt.verifying_keys, vec![[7u8; 32], [9u8; 32]]);
     assert!(cfg.session.retry_match.user_agent && !cfg.session.retry_match.ip);
+
+    // An empty list is unset, like `~`: the default applies.
+    let cfg = load("auth:\n  session:\n    retry_match: []\n").unwrap();
+    assert!(cfg.session.retry_match.ip && !cfg.session.retry_match.user_agent);
 }
 
 #[test]
 fn unknown_keys_in_the_section_are_rejected() {
     let typo = load("auth:\n  jwt:\n    isuer: x\n");
     assert_eq!(parse_error_key(typo), "auth.jwt.isuer in YAML");
+
+    let unset_typo = load("auth:\n  jwt:\n    isuer: ~\n    verifyng_keys: []\n");
+    assert!(parse_error_key(unset_typo).starts_with("auth.jwt."));
 
     let group = load("auth:\n  tokens:\n    ttl: 5\n");
     assert!(parse_error_key(group).starts_with("auth.tokens"));
@@ -243,4 +250,14 @@ fn yaml_file_and_auth_config_file() {
     assert_eq!(from_file.unwrap().jwt.issuer, "from-file");
     assert_eq!(overridden.unwrap().jwt.issuer, "env-wins");
     assert_eq!(env_only.unwrap().jwt.issuer, "env-wins");
+}
+
+#[test]
+fn the_example_file_loads_with_the_defaults() {
+    let example = concat!(env!("CARGO_MANIFEST_DIR"), "/z-auth.example.yaml");
+    let from_file = SourceLoader::new(ConfigSource::yaml_file(example).unwrap())
+        .load_config()
+        .unwrap();
+    let defaults = z_auth::conf::config::RawConfig::default().build().unwrap();
+    assert_eq!(format!("{from_file:?}"), format!("{defaults:?}"));
 }

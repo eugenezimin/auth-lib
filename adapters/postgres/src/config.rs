@@ -165,4 +165,22 @@ database:
         let err = PgConfig::from_source(&ConfigSource::yaml_str(&typo).unwrap()).unwrap_err();
         assert!(err.contains("database.pool_size in YAML"), "{err}");
     }
+
+    #[test]
+    fn the_example_file_loads_with_the_password_from_the_environment() {
+        let example = concat!(env!("CARGO_MANIFEST_DIR"), "/../../z-auth.example.yaml");
+        let source = ConfigSource::yaml_file(example)
+            .unwrap()
+            .with_lookup(|key| (key == ENV_DB_PASSWORD).then(|| "secret".into()));
+        let cfg = PgConfig::from_source(&source).unwrap();
+        assert_eq!(
+            cfg.connection_url(),
+            "postgres://postgres:secret@localhost:5432/auth"
+        );
+        assert_eq!(cfg.max_pool_size, DEFAULT_MAX_POOL_SIZE);
+        assert_eq!(
+            cfg.connect_timeout,
+            Duration::from_secs(DEFAULT_CONNECT_TIMEOUT_SECS)
+        );
+    }
 }

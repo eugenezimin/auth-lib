@@ -273,6 +273,30 @@ fn the_mfa_section_rejects_unknown_keys_but_not_delivery() {
 }
 
 #[test]
+fn the_example_file_loads_with_the_defaults() {
+    use z_auth::conf::config::ConfigSource;
+    use z_auth_mfa::config::MfaSourceLoader;
+
+    let example = concat!(env!("CARGO_MANIFEST_DIR"), "/../../z-auth.example.yaml");
+    let source = ConfigSource::yaml_file(example)
+        .unwrap()
+        .with_lookup(|key| match key {
+            ENV_MFA_HASH_KEY => Some(HASH_KEY.into()),
+            ENV_MFA_ENCRYPTION_KEY => Some(ENCRYPTION_KEY.into()),
+            _ => None,
+        });
+    let from_file = MfaSourceLoader::new(source).load_settings().unwrap();
+    let defaults = MfaDirectLoader::new(
+        RawMfaConfig::default()
+            .hash_key(HASH_KEY)
+            .encryption_key(ENCRYPTION_KEY),
+    )
+    .load_settings()
+    .unwrap();
+    assert_eq!(format!("{from_file:?}"), format!("{defaults:?}"));
+}
+
+#[test]
 fn keys_are_validated() {
     assert_eq!(
         parse_error(RawMfaConfig::default()),

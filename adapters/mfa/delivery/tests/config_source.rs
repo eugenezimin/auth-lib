@@ -123,3 +123,14 @@ fn errors_name_the_path_in_the_file() {
         other => panic!("expected a parse error, got {other:?}"),
     }
 }
+
+#[test]
+fn the_example_file_loads_with_the_defaults() {
+    let example = concat!(env!("CARGO_MANIFEST_DIR"), "/../../../z-auth.example.yaml");
+    let from_file =
+        DeliveryConfig::from_source(&ConfigSource::yaml_file(example).unwrap()).unwrap();
+    assert_eq!(
+        format!("{from_file:?}"),
+        format!("{:?}", DeliveryConfig::default())
+    );
+}
