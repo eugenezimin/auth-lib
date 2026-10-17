@@ -23,6 +23,7 @@ use std::time::Duration;
 use z_auth::conf::config::{ConfigError, ConfigSource, Setting};
 use z_auth::identity::external::{LinkPolicy, ProviderPolicy, Provisioning};
 
+use crate::config::binding::BindingSettings;
 use crate::config::model::{
     ClaimMap, GitHubEndpoints, OAuth2Endpoints, OidcEndpoints, ProviderKind, ProviderSettings,
     RawProvider, RawSsoConfig, SsoSettings, TokenAuth,
@@ -127,6 +128,8 @@ impl SsoConfigLoader for SsoSourceLoader {
         Ok(RawSsoConfig {
             callback_url: s.get(ENV_SSO_CALLBACK_URL).map(|v| v.value),
             flow_ttl_secs,
+            binding_transport: s.get(ENV_SSO_BINDING_TRANSPORT).map(|v| v.value),
+            binding_name: s.get(ENV_SSO_BINDING_NAME).map(|v| v.value),
             providers,
         })
     }
@@ -185,6 +188,11 @@ impl RawSsoConfig {
                 reason: "must be positive".into(),
             });
         }
+        let binding = BindingSettings::build(
+            self.binding_transport.as_deref(),
+            self.binding_name.as_deref(),
+            callback_url.starts_with("https:"),
+        )?;
         let mut seen = BTreeSet::new();
         let mut providers = Vec::new();
         for raw in self.providers {
@@ -200,6 +208,7 @@ impl RawSsoConfig {
         Ok(SsoSettings {
             callback_url,
             flow_ttl,
+            binding,
             providers,
         })
     }

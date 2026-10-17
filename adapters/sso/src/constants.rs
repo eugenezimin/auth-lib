@@ -8,6 +8,12 @@ use z_auth::conf::config::Key;
 /// How long a redirect to an identity provider stays valid: 10 minutes.
 pub const DEFAULT_FLOW_TTL_SECS: u64 = 600;
 
+/// Default binding names: a `__Host-` cookie on an https callback, a plain
+/// cookie on a localhost http callback, or a custom header.
+pub const DEFAULT_BINDING_COOKIE: &str = "__Host-sso-binding";
+pub const DEFAULT_BINDING_COOKIE_INSECURE: &str = "sso-binding";
+pub const DEFAULT_BINDING_HEADER: &str = "X-SSO-Binding";
+
 /// Timeout of each request to an identity provider.
 pub const HTTP_TIMEOUT_SECS: u64 = 10;
 
@@ -51,6 +57,10 @@ pub const PROVIDERS_PATH: &str = "sso.providers";
 
 pub const ENV_SSO_CALLBACK_URL: &str = "AUTH_SSO_CALLBACK_URL";
 pub const ENV_SSO_FLOW_TTL_SECS: &str = "AUTH_SSO_FLOW_TTL_SECS";
+/// `cookie` (default) or `header`; see [`crate::config::BindingTransport`].
+pub const ENV_SSO_BINDING_TRANSPORT: &str = "AUTH_SSO_BINDING_TRANSPORT";
+/// The binding's cookie or header name.
+pub const ENV_SSO_BINDING_NAME: &str = "AUTH_SSO_BINDING_NAME";
 /// Comma-separated provider names configured through the environment only
 /// (each setting then comes from `AUTH_SSO_<NAME>_<SETTING>`).
 pub const ENV_SSO_PROVIDERS: &str = "AUTH_SSO_PROVIDERS";
@@ -63,6 +73,8 @@ pub const ENV_SSO_PROVIDER_PREFIX: &str = "AUTH_SSO_";
 pub const KEYS: &[Key] = &[
     Key::new(ENV_SSO_CALLBACK_URL, "sso.callback_url"),
     Key::new(ENV_SSO_FLOW_TTL_SECS, "sso.flow_ttl_secs"),
+    Key::new(ENV_SSO_BINDING_TRANSPORT, "sso.binding.transport"),
+    Key::new(ENV_SSO_BINDING_NAME, "sso.binding.name"),
 ];
 
 // ── Provider settings (relative to `sso.providers.<name>`) ───────────────────

@@ -6,6 +6,8 @@ use std::time::Duration;
 use z_auth::conf::config::Setting;
 use z_auth::identity::external::ProviderPolicy;
 
+use crate::config::binding::BindingSettings;
+
 /// Validated settings, built by [`RawSsoConfig::build`].
 #[derive(Debug, Clone)]
 pub struct SsoSettings {
@@ -14,6 +16,8 @@ pub struct SsoSettings {
     pub callback_url: String,
     /// How long a redirect to a provider stays valid.
     pub flow_ttl: Duration,
+    /// How the browser binding travels to the callback.
+    pub binding: BindingSettings,
     pub providers: Vec<ProviderSettings>,
 }
 
@@ -132,6 +136,9 @@ impl std::str::FromStr for TokenAuth {
 pub struct RawSsoConfig {
     pub callback_url: Option<String>,
     pub flow_ttl_secs: Option<u64>,
+    /// `cookie` or `header`.
+    pub binding_transport: Option<String>,
+    pub binding_name: Option<String>,
     pub providers: Vec<RawProvider>,
 }
 
@@ -150,6 +157,15 @@ impl RawSsoConfig {
     }
     pub fn flow_ttl_secs(mut self, v: u64) -> Self {
         self.flow_ttl_secs = Some(v);
+        self
+    }
+    /// `cookie` or `header`.
+    pub fn binding_transport(mut self, v: impl Into<String>) -> Self {
+        self.binding_transport = Some(v.into());
+        self
+    }
+    pub fn binding_name(mut self, v: impl Into<String>) -> Self {
+        self.binding_name = Some(v.into());
         self
     }
     /// Add a provider from `(setting, value)` pairs, e.g.

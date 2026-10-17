@@ -16,10 +16,12 @@
 //!
 //! // GET /auth/sso/google/start
 //! let redirect = sso.begin_login(&auth, "google").await?;
-//! // → set redirect.binding as an HttpOnly cookie, send the browser to redirect.url
+//! // → keep redirect.binding with the browser as sso.binding() says, e.g. the
+//! //   Set-Cookie value from sso.set_binding_cookie(&redirect), and send the
+//! //   browser to redirect.url
 //!
-//! // GET /auth/sso/callback?state=…&code=…
-//! match sso.callback(&auth, params, &binding_cookie, ctx).await? {
+//! // GET /auth/sso/callback?state=…&code=… (binding from the cookie or header)
+//! match sso.callback(&auth, params, &binding, ctx).await? {
 //!     CallbackOutcome::Login(ExternalLoginOutcome::Tokens(pair)) => { /* signed in */ }
 //!     CallbackOutcome::Login(ExternalLoginOutcome::SecondFactor(c)) => { /* complete_login */ }
 //!     CallbackOutcome::Login(ExternalLoginOutcome::LinkConfirmation(c)) => { /* confirm_link */ }
@@ -57,7 +59,9 @@
 //! - Authorization code flow with PKCE (S256), a fresh `state` and nonce
 //!   per redirect, each accepted once and only within `sso.flow_ttl_secs`.
 //! - The callback must come from the browser that started it
-//!   ([`Redirect::binding`]).
+//!   ([`Redirect::binding`]), carried by an HttpOnly `__Host-` cookie or by a
+//!   header from the host's own page ([`config::BindingTransport`]); it
+//!   cannot be turned off.
 //! - ID tokens: asymmetric signatures from the provider's JWKS only;
 //!   issuer, audience, `azp`, expiry and nonce checked.
 //! - Only `https` endpoints (plain `http` on localhost, for development).

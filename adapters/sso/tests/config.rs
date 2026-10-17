@@ -7,7 +7,9 @@ use std::time::Duration;
 
 use z_auth::conf::config::{ConfigError, ConfigSource};
 use z_auth::identity::external::{LinkPolicy, Provisioning};
-use z_auth_sso::config::{ProviderKind, SsoConfigLoader, SsoSettings, SsoSourceLoader, TokenAuth};
+use z_auth_sso::config::{
+    BindingTransport, ProviderKind, SsoConfigLoader, SsoSettings, SsoSourceLoader, TokenAuth,
+};
 
 const FILE: &str = r#"
 sso:
@@ -227,4 +229,49 @@ fn the_example_file_loads() {
     // Without its secret the GitHub preset is refused.
     let bare = ConfigSource::yaml_file(example).unwrap();
     assert!(SsoSourceLoader::new(bare).load_settings().is_err());
+}
+
+#[test]
+fn the_binding_is_configurable_but_never_off() {
+    let base = "sso:\n  callback_url: https://app.example.com/cb\n";
+    let s = load(base, &[]).unwrap();
+    assert_eq!(
+        (s.binding.transport, s.binding.name.as_str()),
+        (BindingTransport::Cookie, "__Host-sso-binding")
+    );
+
+    let header = format!("{base}  binding:\n    transport: header\n    name: X-Login-Binding\n");
+    let s = load(&header, &[]).unwrap();
+    assert_eq!(
+        (s.binding.transport, s.binding.name.as_str()),
+        (BindingTransport::Header, "X-Login-Binding")
+    );
+    // The environment wins, as everywhere.
+    let s = load(
+        &header,
+        &[
+            ("AUTH_SSO_BINDING_TRANSPORT", "cookie"),
+            ("AUTH_SSO_BINDING_NAME", "__Host-x"),
+        ],
+    )
+    .unwrap();
+    assert_eq!(s.binding.name, "__Host-x");
+
+    for (yaml, expected) in [
+        ("    transport: off\n", "cannot be turned off"),
+        ("    transport: query\n", "defeats it"),
+        ("    transport: cookie\n    name: sso\n", "__Host-"),
+        (
+            "    transport: header\n    name: Authorization\n",
+            "reserved",
+        ),
+    ] {
+        let e = parse_error(load(&format!("{base}  binding:\n{yaml}"), &[]));
+        assert!(
+            e.contains(expected) && e.contains("AUTH_SSO_BINDING"),
+            "{e}"
+        );
+    }
+    let e = parse_error(load(&format!("{base}  binding:\n    path: /\n"), &[]));
+    assert!(e.contains("sso.binding.path"), "{e}");
 }

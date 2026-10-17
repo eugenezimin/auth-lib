@@ -154,6 +154,9 @@ mfa:
 sso:
   callback_url: https://app.example.com/auth/sso/callback   # AUTH_SSO_CALLBACK_URL – registered with every provider
   flow_ttl_secs: 600           # AUTH_SSO_FLOW_TTL_SECS – how long a redirect to a provider stays valid
+  binding:                     # ties the callback to the browser that started it; cannot be turned off
+    transport: cookie          # AUTH_SSO_BINDING_TRANSPORT – cookie | header (from your own page, strict CORS)
+    name: ~                    # AUTH_SSO_BINDING_NAME – default __Host-sso-binding (https), sso-binding (localhost), X-SSO-Binding (header)
   providers:
     google:                    # OpenID Connect: the issuer is enough, the rest comes from discovery
       kind: oidc               # oidc | oauth2 | github
