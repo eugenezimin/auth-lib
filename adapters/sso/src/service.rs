@@ -11,7 +11,7 @@ use z_auth::ZAuth;
 use z_auth::identity::external::ExternalIdentity;
 use z_auth::security::authentication::{ClientContext, ExternalLoginOutcome, flow_key};
 
-use crate::config::SsoSettings;
+use crate::config::{BindingSettings, SsoSettings};
 use crate::constants::FLOW_SSO;
 use crate::flow::{Intent, PendingRedirect};
 use crate::http::{default_client, failed, random_secret, sha256_b64};
@@ -22,9 +22,12 @@ use crate::provider::{self, AuthorizationRequest, IdentityProvider};
 pub struct Redirect {
     /// The provider's authorization URL.
     pub url: String,
-    /// Keep in an HttpOnly, `SameSite=Lax` cookie until the callback and
-    /// pass it to [`Sso::callback`]: a callback in any other browser is
-    /// refused, so nobody can sign a victim into the attacker's account.
+    /// Keep it with the browser until the callback, as the configured
+    /// [`BindingSettings`] say (the cookie from [`Sso::set_binding_cookie`],
+    /// or the host page's storage for the header transport), and pass it to
+    /// [`Sso::callback`].  A callback in any other browser is refused, so
+    /// nobody can sign a victim into the attacker's account or link the
+    /// victim's identity to it.  Never put it in a URL.
     pub binding: String,
     /// When the redirect stops being accepted (the cookie's lifetime).
     pub expires_at: DateTime<Utc>,
@@ -66,6 +69,7 @@ pub struct ProviderInfo {
 pub struct Sso {
     callback_url: String,
     flow_ttl: Duration,
+    binding: BindingSettings,
     providers: BTreeMap<String, Arc<dyn IdentityProvider>>,
 }
 
@@ -87,8 +91,27 @@ impl Sso {
         Ok(Self {
             callback_url: settings.callback_url,
             flow_ttl: settings.flow_ttl,
+            binding: settings.binding,
             providers,
         })
+    }
+
+    /// How the binding travels: the cookie or header to read it from at
+    /// the callback.
+    pub fn binding(&self) -> &BindingSettings {
+        &self.binding
+    }
+
+    /// The `Set-Cookie` value that stores a redirect's binding, with the
+    /// cookie transport; `None` with the header transport.
+    pub fn set_binding_cookie(&self, redirect: &Redirect) -> Option<String> {
+        self.binding.set_cookie(&redirect.binding, self.flow_ttl)
+    }
+
+    /// The `Set-Cookie` value that deletes the binding cookie after the
+    /// callback; `None` with the header transport.
+    pub fn clear_binding_cookie(&self) -> Option<String> {
+        self.binding.clear_cookie()
     }
 
     /// Add (or replace, by name) a provider the host implemented.
@@ -182,13 +205,13 @@ impl Sso {
     }
 
     /// Finish at the callback URL: `params` from its query, `binding` from
-    /// the cookie set with the [`Redirect`].  Each redirect is accepted
-    /// once.
+    /// the cookie or header named by [`binding`](Self::binding) (empty when
+    /// absent).  Each redirect is accepted once.
     ///
     /// # Errors
     /// [`AuthError::ChallengeExpired`] for an unknown, used or expired
-    /// `state`; [`AuthError::ExternalLoginFailed`] when the binding does
-    /// not match or the provider's answer is refused;
+    /// `state`; [`AuthError::ExternalLoginFailed`] when the binding is
+    /// missing or does not match, or the provider's answer is refused;
     /// [`AuthError::ExternalProviderUnavailable`] when it cannot be reached.
     pub async fn callback(
         &self,
@@ -197,6 +220,13 @@ impl Sso {
         binding: &str,
         ctx: ClientContext,
     ) -> Result<CallbackOutcome, AuthError> {
+        if binding.trim().is_empty() {
+            return Err(failed(format!(
+                "the callback carried no binding; pass {} from the browser that started \
+                 the sign-in",
+                self.binding.describe()
+            )));
+        }
         let flows = flow_store(auth)?;
         let state = params
             .state
@@ -209,7 +239,10 @@ impl Sso {
             .ok_or(AuthError::ChallengeExpired)?;
         let pending = PendingRedirect::decode(&pending)?;
         if sha256_b64(binding) != pending.binding_hash {
-            return Err(failed("the sign-in was started in another browser"));
+            return Err(failed(format!(
+                "the sign-in was started in another browser, or {} does not hold its binding",
+                self.binding.describe()
+            )));
         }
         if let Some(error) = &params.error {
             let detail = params.error_description.as_deref().unwrap_or_default();

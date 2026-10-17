@@ -8,9 +8,33 @@ z-auth-sso reads the `sso` section of the configuration file through `SsoSourceL
 |---|---|---|---|
 | `AUTH_SSO_CALLBACK_URL` | `sso.callback_url` | required | The callback route, registered with every provider as its redirect URI. Must be `https` (or `http` on localhost). |
 | `AUTH_SSO_FLOW_TTL_SECS` | `sso.flow_ttl_secs` | `600` | How long a redirect to a provider stays valid. |
+| `AUTH_SSO_BINDING_TRANSPORT` | `sso.binding.transport` | `cookie` | `cookie` or `header`, how the browser binding reaches the callback. It cannot be turned off. |
+| `AUTH_SSO_BINDING_NAME` | `sso.binding.name` | by transport | The cookie or header name. `__Host-sso-binding` for a cookie on an https callback, `sso-binding` on a localhost http one, `X-SSO-Binding` for a header. |
 | `AUTH_SSO_PROVIDERS` | none | none | Comma-separated names of providers configured in the environment alone. |
 
 Providers are mappings under `sso.providers`, keyed by name. A name must match `[a-z][a-z0-9_]*`, because it becomes part of variable names, and it is recorded with every identity the provider links. Each setting of a provider is read from `AUTH_SSO_<NAME>_<SETTING>`, the setting in upper case with `.` written as `_`, before the file. `AUTH_SSO_GOOGLE_CLIENT_SECRET` is `sso.providers.google.client_secret`, and `AUTH_SSO_ACME_CLAIMS_EMAIL` is `sso.providers.acme.claims.email`. A key the provider's kind does not use, or that no kind uses, is rejected.
+
+## The browser binding
+
+The binding ties a callback to the browser that started the redirect. Why it exists and how each transport works is explained in the [README](../README.md#the-browser-binding). Loading the settings refuses every configuration that would weaken it. The transport must be `cookie` or `header`, and `off`, `none`, `query` and `body` are refused with an explanation. A cookie on an https callback must be named with the `__Host-` prefix, which pins it to your exact host, and a header must be a valid header name other than one the browser controls or the server reads for something else, such as `Authorization`, `Cookie`, `Origin` or any `Sec-` or `Proxy-` header.
+
+```yaml
+sso:
+  callback_url: https://app.example.com/auth/sso/callback   # the server's route
+  binding:
+    transport: cookie
+    name: __Host-sso-binding
+```
+
+```yaml
+sso:
+  callback_url: https://app.example.com/sso/callback        # the single-page app's route
+  binding:
+    transport: header
+    name: X-SSO-Binding
+```
+
+With the header transport the callback URL is a page of the application, which forwards `state` and `code` to the API with the binding, and the API's CORS policy must list exact origins only.
 
 ## Settings of every provider
 

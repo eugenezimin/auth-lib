@@ -181,6 +181,74 @@ async fn the_callback_must_come_from_the_browser_that_started_it() {
 }
 
 #[tokio::test]
+async fn a_missing_binding_is_named_and_keeps_the_redirect() {
+    let (idp, sso, s) = setup(&[]).await;
+    let redirect = sso.begin_login(&s.auth, "acme").await.unwrap();
+    idp.answer(&idp.claims(&redirect, "ann"), "k1").await;
+    let err = sso
+        .callback(&s.auth, callback_params(&redirect, "code"), " ", ctx(IP_A))
+        .await;
+    match err {
+        Err(AuthError::ExternalLoginFailed(m)) => {
+            assert!(m.contains("cookie `sso-binding`"), "{m}")
+        }
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+    // A host that forgot the binding has not burnt the user's redirect.
+    tokens(finish(&sso, &s, &redirect, "code").await.unwrap());
+}
+
+#[tokio::test]
+async fn the_binding_cookie_is_set_and_cleared_by_sso() {
+    let (_idp, sso, s) = setup(&[]).await;
+    let redirect = sso.begin_login(&s.auth, "acme").await.unwrap();
+    let cookie = sso.set_binding_cookie(&redirect).unwrap();
+    assert_eq!(
+        cookie,
+        format!(
+            "sso-binding={}; Path=/; Max-Age=600; HttpOnly; SameSite=Lax",
+            redirect.binding
+        )
+    );
+    assert!(sso.clear_binding_cookie().unwrap().contains("Max-Age=0"));
+}
+
+#[tokio::test]
+async fn the_header_transport_works_the_same_way() {
+    let idp = Idp::start().await;
+    let settings = z_auth_sso::config::RawSsoConfig::default()
+        .callback_url("https://app.example.com/sso/callback")
+        .binding_transport("header")
+        .provider("acme", idp.provider(&[]))
+        .build()
+        .unwrap();
+    assert_eq!(settings.binding.name, "X-SSO-Binding");
+    let sso = Sso::new(settings).unwrap();
+    let s = external_server(test_config());
+    let redirect = sso.begin_login(&s.auth, "acme").await.unwrap();
+    assert_eq!(sso.set_binding_cookie(&redirect), None);
+    idp.answer(&idp.claims(&redirect, "ann"), "k1").await;
+    // The host's page sends the value it kept, in X-SSO-Binding.
+    tokens(finish(&sso, &s, &redirect, "code").await.unwrap());
+
+    let redirect = sso.begin_login(&s.auth, "acme").await.unwrap();
+    let err = sso
+        .callback(
+            &s.auth,
+            callback_params(&redirect, "code"),
+            "forged",
+            ctx(IP_A),
+        )
+        .await;
+    match err {
+        Err(AuthError::ExternalLoginFailed(m)) => {
+            assert!(m.contains("header `X-SSO-Binding`"), "{m}")
+        }
+        other => panic!("expected a refusal, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn redirects_expire() {
     let (idp, sso, s) = setup(&[]).await;
     let redirect = sso.begin_login(&s.auth, "acme").await.unwrap();

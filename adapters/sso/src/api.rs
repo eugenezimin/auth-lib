@@ -1,21 +1,25 @@
 //! Framework-agnostic endpoints, in the style of z-auth's
 //! `controller::api::handlers`: the host wraps them in its web framework,
-//! sets the binding cookie and supplies the [`ClientContext`].
+//! carries the browser binding as [`Sso::binding`] says, and supplies the
+//! [`ClientContext`].
 //!
 //! ```rust,ignore
-//! // axum (host application code)
-//! async fn sso_start(State(app): State<App>, Path(provider): Path<String>, jar: CookieJar)
-//!     -> Result<(CookieJar, Redirect), MyError> {
-//!     let r = api::begin_login(&app.sso, &app.auth, &provider).await?;
-//!     let cookie = Cookie::build(("sso_binding", r.binding)).http_only(true).secure(true)
-//!         .same_site(SameSite::Lax).path("/auth/sso");
-//!     Ok((jar.add(cookie), Redirect::to(&r.url)))
+//! // axum, cookie transport (host application code)
+//! async fn sso_start(State(app): State<App>, Path(provider): Path<String>)
+//!     -> Result<impl IntoResponse, MyError> {
+//!     let r = app.sso.begin_login(&app.auth, &provider).await?;
+//!     let cookie = app.sso.set_binding_cookie(&r).expect("cookie transport");
+//!     Ok(([(SET_COOKIE, cookie), (LOCATION, r.url)], StatusCode::FOUND))
 //! }
 //! async fn sso_callback(State(app): State<App>, Query(q): Query<CallbackRequest>,
-//!     jar: CookieJar, ConnectInfo(addr): ConnectInfo<SocketAddr>)
-//!     -> Result<Json<CallbackResponse>, MyError> {
-//!     let binding = jar.get("sso_binding").map(|c| c.value().to_owned()).unwrap_or_default();
-//!     Ok(Json(api::callback(&app.sso, &app.auth, q, &binding, ClientContext::new(addr.ip())).await?))
+//!     headers: HeaderMap, ConnectInfo(addr): ConnectInfo<SocketAddr>)
+//!     -> Result<impl IntoResponse, MyError> {
+//!     let name = &app.sso.binding().name;
+//!     // Cookie transport: the cookie `name`; header transport: headers.get(name).
+//!     let binding = cookie_value(&headers, name).unwrap_or_default();
+//!     let body = api::callback(&app.sso, &app.auth, q, &binding, ClientContext::new(addr.ip())).await?;
+//!     let clear = app.sso.clear_binding_cookie().expect("cookie transport");
+//!     Ok(([(SET_COOKIE, clear)], Json(body)))
 //! }
 //! ```
 
@@ -41,8 +45,9 @@ pub struct ProviderResponse {
 pub struct RedirectResponse {
     /// Send the browser here.
     pub url: String,
-    /// Store in an HttpOnly cookie for the callback; never expose to
-    /// scripts.
+    /// Keep with the browser for the callback, in the configured cookie
+    /// (from [`Sso::set_binding_cookie`]) or, with the header transport, in
+    /// the host page's storage.  Never put it in a URL.
     pub binding: String,
     pub expires_at: DateTime<Utc>,
 }
